@@ -248,6 +248,8 @@ class TranslationEngine:
             except Exception as e:
                 print(f"[GLOSSARY] Info: ekstraksi nama otomatis dilewati: {e}")
 
+        ocr_q_list = [b.get("ocr_quality", 1.0) for b in valid_bubbles]
+
         if target_lang in ["ind_Latn", "both"]:
             raw_id, backend_id = self.translator.translate_page_bubbles(
                 texts=raw_texts,
@@ -255,7 +257,8 @@ class TranslationEngine:
                 src_lang=page_lang,
                 tgt_lang="ind_Latn",
                 series_hint=series_id,
-                glossary=active_glossary
+                glossary=active_glossary,
+                ocr_qualities=ocr_q_list
             )
             used_backends["ind_Latn"] = backend_id
 
@@ -277,7 +280,8 @@ class TranslationEngine:
                 src_lang=page_lang,
                 tgt_lang="eng_Latn",
                 series_hint=series_id,
-                glossary=active_glossary
+                glossary=active_glossary,
+                ocr_qualities=ocr_q_list
             )
             used_backends["eng_Latn"] = backend_en
 

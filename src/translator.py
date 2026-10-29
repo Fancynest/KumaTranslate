@@ -40,7 +40,16 @@ class LLMTranslator:
             return []
 
         target_name = "Indonesian (Bahasa Indonesia)" if tgt_lang == "ind_Latn" else "English"
-        source_name = "Japanese" if src_lang == "jpn_Jpan" else ("Korean" if src_lang == "kor_Hang" else "Chinese")
+        if src_lang in ["jpn_Jpan", "ja"]:
+            source_name = "Japanese"
+        elif src_lang in ["kor_Hang", "ko"]:
+            source_name = "Korean"
+        elif src_lang in ["zho_Hans", "zh"]:
+            source_name = "Chinese"
+        elif src_lang in ["eng_Latn", "en"]:
+            source_name = "English"
+        else:
+            source_name = "Original Comic Language"
 
         prompt_lines = [f"{i+1}: {t}" for i, t in enumerate(texts)]
         system_prompt = (
@@ -52,7 +61,8 @@ class LLMTranslator:
             "4. Bubble Space Efficiency: Keep dialogue concise and punchy so it fits comfortably inside comic speech bubbles without text overflow.\n"
             "5. Proper Names & Glossary: NEVER translate proper character names or series titles into literal common nouns (e.g. do not translate names into foods, objects, or common words). Strictly follow romanized names and the glossary if provided.\n"
             "6. SFX & Artwork: Do not translate sound effects (SFX) or onomatopoeia artwork; keep them as original or leave unchanged.\n"
-            "7. Strict Accuracy & Invariance: Do not invert negation, tense, or intent. Do not change statements into questions. Do not alter who performs an action. Do not invent explanations or facts absent from the original dialogue.\n\n"
+            "7. Strict Accuracy & Invariance: Do not invert negation, tense, or intent. Do not change statements into questions. Do not alter who performs an action. Do not invent explanations or facts absent from the original dialogue.\n"
+            "8. OCR Robustness & Error Invariance: The source dialogue may contain OCR glitches such as words glued together without spaces (e.g. 'YOUKNOW', 'AREMANY'), character misrecognitions/typos (e.g. '1'/'l', 'rn'/'m', '0'/'o', 'teh'/'the'), or hyphenated words broken across line wraps ('SIGNA- TURE'). You must intelligently infer the intended coherent sentence from context before translating.\n\n"
             "OUTPUT FORMAT:\n"
             'Return STRICTLY a single JSON object mapping each bubble number (string) to its localized translation string. '
             'Example: {"1": "...", "2": "..."}. Do not include explanations, thinking tags, or markdown outside the JSON.'
@@ -299,12 +309,14 @@ class MangaTranslator:
         src_lang: Optional[str] = None,
         tgt_lang: Optional[str] = None,
         series_hint: Optional[str] = None,
-        glossary: Optional[Dict[str, str]] = None
+        glossary: Optional[Dict[str, str]] = None,
+        ocr_qualities: Optional[List[float]] = None
     ) -> Tuple[List[str], str]:
         """
         Menerjemahkan seluruh balon dalam satu halaman komik.
-        Mendukung backend 'llm' (Ollama/API) dengan reading order dan output JSON terstruktur,
-        serta otomatis fallback ke NLLB-200 jika LLM gagal atau offline.
+        Mendukung backend 'llm' (Ollama/API) dengan reading order dan output JSON terstruktur.
+        Menjadikan LLM sebagai jalur utama untuk balon dengan ocr_quality rendah (< 0.6)
+        atau sumber sangat pendek (<= 3 kata / karakter), serta otomatis fallback ke NLLB-200 offline.
         
         Mengembalikan (daftar_terjemahan, backend_yang_digunakan).
         """
@@ -316,7 +328,13 @@ class MangaTranslator:
         # Normalisasi teks sebelum proses penerjemahan (baik LLM maupun NLLB)
         normalized_texts = [normalize_ocr_text(t) if t else "" for t in texts]
 
-        if chosen_backend in ["llm", "auto"]:
+        # Periksa apakah ada balon berkualitas rendah atau teks sangat pendek yang membutuhkan inferensi konteks LLM
+        has_low_quality = bool(ocr_qualities and any(q < 0.6 for q in ocr_qualities))
+        has_short_sources = any(len(t.strip().split()) <= 3 or len(t.strip()) <= 3 for t in texts if t)
+        
+        should_prioritize_llm = chosen_backend in ["llm", "auto"] and (chosen_backend == "llm" or has_low_quality or has_short_sources)
+
+        if should_prioritize_llm or chosen_backend in ["llm", "auto"]:
             try:
                 # LLM mendukung terjemahan ke Bahasa Indonesia maupun English
                 if (tgt_lang or self.default_tgt_lang) in ["ind_Latn", "eng_Latn"]:
