@@ -223,6 +223,24 @@
           </p>
           <div id="low-ocr-list" class="space-y-1 font-mono text-[11px] text-zinc-300"></div>
         </div>
+
+        <!-- Discovered Name Candidates Card (Step 8) -->
+        <div id="name-candidates-card" class="hidden border border-zinc-800 bg-zinc-900/60 rounded-lg p-4 space-y-3 text-xs">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center space-x-2 text-zinc-200 font-semibold">
+              <i data-lucide="user-check" class="w-4 h-4 text-emerald-400"></i>
+              <span>Kandidat Nama Tokoh & Istilah Terdeteksi</span>
+            </div>
+            <button id="btn-accept-all-candidates" type="button" class="px-2.5 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-[11px] font-medium flex items-center space-x-1 transition-colors">
+              <i data-lucide="check-check" class="w-3.5 h-3.5 text-emerald-400"></i>
+              <span>Simpan Semua ke Glosarium</span>
+            </button>
+          </div>
+          <p class="text-zinc-400 text-[11px]">
+            Nama atau istilah Katakana yang berulang berikut ditemukan dari hasil OCR chapter. Konfirmasi atau sesuaikan ejaannya untuk disimpan permanen ke glosarium seri:
+          </p>
+          <div id="candidates-ui-list" class="space-y-2 max-h-60 overflow-y-auto"></div>
+        </div>
       </div>
     </div>
 
@@ -516,6 +534,89 @@
         });
       } else {
         lowOcrCard.classList.add('hidden');
+      }
+
+      const nameCandCard = document.getElementById('name-candidates-card');
+      const candidatesUiList = document.getElementById('candidates-ui-list');
+      if (result.name_candidates && result.name_candidates.length > 0) {
+        nameCandCard.classList.remove('hidden');
+        candidatesUiList.innerHTML = '';
+        result.name_candidates.forEach((c, idx) => {
+          const item = document.createElement('div');
+          item.className = 'flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-zinc-950/80 p-2.5 rounded border border-zinc-800';
+          const reasonsBadge = (c.reasons || []).join(', ');
+          item.innerHTML = `
+            <div class="flex items-center space-x-2">
+              <span class="font-medium text-zinc-100 text-xs">${c.term}</span>
+              <span class="text-[10px] text-zinc-500 font-mono">Skor: ${c.score} (${reasonsBadge})</span>
+            </div>
+            <div class="flex items-center space-x-2">
+              <input type="text" id="cand-input-${idx}" value="${c.suggested_translation || ''}" class="px-2 py-1 rounded bg-zinc-900 border border-zinc-700 text-xs text-zinc-200 w-32 focus:outline-none focus:border-zinc-500">
+              <button type="button" class="px-2.5 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-[11px] font-medium btn-confirm-single transition-colors" data-idx="${idx}" data-term="${c.term}">
+                + Glosarium
+              </button>
+            </div>
+          `;
+          candidatesUiList.appendChild(item);
+        });
+
+        document.querySelectorAll('.btn-confirm-single').forEach(btn => {
+          btn.addEventListener('click', async (e) => {
+            const idx = e.currentTarget.getAttribute('data-idx');
+            const term = e.currentTarget.getAttribute('data-term');
+            const inputVal = document.getElementById(`cand-input-${idx}`).value.trim();
+            if (!term || !inputVal) return;
+            const series = getActiveSeries();
+            try {
+              const res = await fetch(`/api/glossary/${series}/accept`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({terms: [{term: term, translation: inputVal}]})
+              });
+              if (res.ok) {
+                e.currentTarget.innerHTML = '<i data-lucide="check" class="w-3.5 h-3.5 text-emerald-400 inline"></i> Disimpan';
+                e.currentTarget.disabled = true;
+                e.currentTarget.classList.add('bg-emerald-950/60', 'text-emerald-300', 'border', 'border-emerald-800');
+                lucide.createIcons();
+              }
+            } catch (err) {
+              alert('Gagal menyimpan glosarium: ' + err.message);
+            }
+          });
+        });
+
+        const btnAcceptAll = document.getElementById('btn-accept-all-candidates');
+        btnAcceptAll.onclick = async () => {
+          const termsToAccept = [];
+          result.name_candidates.forEach((c, idx) => {
+            const input = document.getElementById(`cand-input-${idx}`);
+            if (input && input.value.trim()) {
+              termsToAccept.push({term: c.term, translation: input.value.trim()});
+            }
+          });
+          if (termsToAccept.length === 0) return;
+          const series = getActiveSeries();
+          try {
+            const res = await fetch(`/api/glossary/${series}/accept`, {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({terms: termsToAccept})
+            });
+            if (res.ok) {
+              btnAcceptAll.innerHTML = '<i data-lucide="check" class="w-3.5 h-3.5 text-emerald-400 inline"></i> Semua Disimpan';
+              btnAcceptAll.disabled = true;
+              document.querySelectorAll('.btn-confirm-single').forEach(b => {
+                b.innerHTML = '<i data-lucide="check" class="w-3.5 h-3.5 text-emerald-400 inline"></i> Disimpan';
+                b.disabled = true;
+              });
+              lucide.createIcons();
+            }
+          } catch (err) {
+            alert('Gagal menyimpan glosarium: ' + err.message);
+          }
+        };
+      } else {
+        nameCandCard.classList.add('hidden');
       }
 
       if (originalPages.length > 1) {

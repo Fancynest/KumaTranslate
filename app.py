@@ -555,6 +555,20 @@ def run_translation_task(
                 "url": f"/static_files/{rel_en}"
             })
 
+        # Ekstraksi kandidat nama tokoh/istilah untuk konfirmasi pengguna di UI
+        task_debug_dir = os.path.join(task_dir, "debug")
+        debug_files = sorted([f for f in os.listdir(task_debug_dir) if f.endswith("_debug.json")]) if os.path.exists(task_debug_dir) else []
+        chapter_texts = []
+        for df in debug_files:
+            try:
+                with open(os.path.join(task_debug_dir, df), "r", encoding="utf-8") as jf:
+                    pdata = json.load(jf)
+                    chapter_texts.append([b.get("ocr_text", "") for b in pdata.get("bubbles", []) if b.get("ocr_text")])
+            except Exception:
+                pass
+
+        discovered_candidates = engine.name_extractor.extract_candidates(chapter_texts) if chapter_texts else []
+
         # 4. Selesai
         task["is_completed"] = True
         task["percent"] = 100
@@ -566,7 +580,8 @@ def run_translation_task(
             "downloads": downloads,
             "original_pages": orig_web_paths,
             "translated_pages": trans_web_paths,
-            "low_quality_bubbles": low_quality_bubbles_all
+            "low_quality_bubbles": low_quality_bubbles_all,
+            "name_candidates": discovered_candidates
         }
 
     except Exception as e:
