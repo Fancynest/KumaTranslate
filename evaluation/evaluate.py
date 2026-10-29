@@ -34,7 +34,8 @@ def evaluate_detector(
     gt_path: str = "evaluation/ground_truth.json",
     iou_threshold: float = 0.50,
     save_debug: bool = False,
-    target_type: str = "text"  # 'text', 'bubble', atau 'both'
+    target_type: str = "both",  # 'text', 'bubble', atau 'both'
+    detector_mode: str = "heuristic"  # 'heuristic', 'yolo', 'auto'
 ) -> Dict[str, Any]:
     if not os.path.exists(gt_path):
         raise FileNotFoundError(f"File Ground Truth tidak ditemukan: {gt_path}")
@@ -42,7 +43,12 @@ def evaluate_detector(
     with open(gt_path, "r", encoding="utf-8") as f:
         ground_truth = json.load(f)
 
-    detector = BubbleDetector()
+    # Inisialisasi detector dengan mode tertentu jika didukung
+    try:
+        detector = BubbleDetector(mode=detector_mode)
+    except TypeError:
+        detector = BubbleDetector()
+
     modes_to_run = ["text_bbox", "bubble_bbox"] if target_type == "both" else ([f"{target_type}_bbox"] if not target_type.endswith("_bbox") else [target_type])
 
     final_results = {}
@@ -50,8 +56,8 @@ def evaluate_detector(
     for mode in modes_to_run:
         mode_label = "Klaster Teks (text_bbox)" if mode == "text_bbox" else "Batas Balon (bubble_bbox)"
         print("=" * 86)
-        print(f"{'EVALUASI DETEKTOR - ' + mode_label:^86}")
-        print(f"{'Dataset: 26 Halaman Nyata | Ambang Batas IoU: ' + str(iou_threshold):^86}")
+        print(f"{'EVALUASI DETEKTOR (' + detector_mode.upper() + ') - ' + mode_label:^86}")
+        print(f"{'Dataset: Manual Ground Truth | Ambang Batas IoU: ' + str(iou_threshold):^86}")
         print("=" * 86)
         print(f"{'No':<3} | {'Nama File':<24} | {'GT':<4} | {'Pred':<5} | {'TP':<4} | {'FP':<4} | {'FN':<4} | {'Prec (%)':<9} | {'Rec (%)':<8} | {'F1 (%)':<7}")
         print("-" * 86)
@@ -63,13 +69,15 @@ def evaluate_detector(
         page_results = []
         t0 = time.time()
 
-        for idx, (img_name, gt_boxes) in enumerate(sorted(ground_truth.items())):
+        for idx, (img_name, gt_entry) in enumerate(sorted(ground_truth.items())):
             img_path = os.path.join(images_dir, img_name)
             if not os.path.exists(img_path):
                 continue
 
+            gt_boxes = gt_entry.get(mode, gt_entry) if isinstance(gt_entry, dict) else gt_entry
+
             predictions = detector.detect(img_path, debug=save_debug, debug_dir="evaluation/debug_overlays")
-            pred_boxes = [p[mode] for p in predictions]
+            pred_boxes = [p.get(mode, p["bbox"]) for p in predictions]
 
             # Greedy bipartite matching berbasis IoU
             matched_gt = set()
@@ -122,7 +130,7 @@ def evaluate_detector(
 
         print("=" * 86)
         print(f"RANGKUMAN EVALUASI ({mode_label}) ({len(page_results)} Halaman Selesai dalam {duration:.1f}s):")
-        print(f"  * Total Ground Truth Bubbles : {total_tp + total_fn}")
+        print(f"  * Total Ground Truth         : {total_tp + total_fn}")
         print(f"  * Total Prediksi Model       : {total_tp + total_fp}")
         print(f"  * True Positives (TP)        : {total_tp}")
         print(f"  * False Positives (FP)       : {total_fp}")
@@ -143,6 +151,7 @@ def evaluate_detector(
     return final_results
 
 if __name__ == "__main__":
-    target = "both" if "--both" in sys.argv else ("bubble" if "--bubble" in sys.argv else "both")
+    target = "both" if "--both" in sys.argv else ("bubble" if "--bubble" in sys.argv else ("text" if "--text" in sys.argv else "both"))
     debug_flag = "--debug" in sys.argv
-    evaluate_detector(target_type=target, save_debug=debug_flag)
+    det_mode = "yolo" if "--yolo" in sys.argv else ("heuristic" if "--heuristic" in sys.argv else "heuristic")
+    evaluate_detector(target_type=target, save_debug=debug_flag, detector_mode=det_mode)
