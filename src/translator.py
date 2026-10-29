@@ -6,6 +6,7 @@ import requests
 import torch
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 from typing import Optional, List, Dict, Any, Tuple
+from src.text_utils import normalize_ocr_text, apply_glossary_source, split_sentences
 
 logger = logging.getLogger("KumaTranslate.Translator")
 
@@ -212,8 +213,9 @@ class MangaTranslator:
         glossary: Optional[Dict[str, str]] = None
     ) -> List[str]:
         """
-        Menerjemahkan BANYAK kalimat sekaligus dalam 1 panggilan GPU (Batch Processing).
-        Mendukung pra-substitusi glosarium istilah dan nama diri agar tidak diterjemahkan harafiah.
+        Menerjemahkan BANYAK kalimat sekaligus dalam panggilan GPU chunking (Batch Processing).
+        Pipeline per teks:
+        normalize_ocr_text -> apply_glossary_source -> split_sentences -> chunk 16 NLLB -> reassemble.
         """
         if not texts:
             return []
@@ -224,53 +226,69 @@ class MangaTranslator:
         if source == target:
             return texts
 
-        # Bersihkan teks input dan terapkan pra-substitusi glosarium
-        valid_indices = []
-        sub_texts = []
-        for i, t in enumerate(texts):
-            # Jika hanya titik-titik atau tanda seru, tidak perlu ke model
-            if t and t.strip():
-                valid_indices.append(i)
-                cleaned_input = t.strip()
-                if glossary:
-                    for s_term, t_term in sorted(glossary.items(), key=lambda x: len(x[0]), reverse=True):
-                        if s_term in cleaned_input:
-                            cleaned_input = cleaned_input.replace(s_term, t_term)
-                sub_texts.append(cleaned_input)
+        # 1. Pipeline normalisasi, pra-substitusi glosarium aman, dan pemecahan kalimat
+        balloon_segment_slices: List[Tuple[Optional[int], Optional[int], str]] = []
+        all_segments: List[str] = []
 
-        if not valid_indices:
-            return texts
+        for t in texts:
+            norm_t = normalize_ocr_text(t) if t else ""
+            if not norm_t:
+                # Teks yang kosong setelah normalisasi dikembalikan apa adanya
+                balloon_segment_slices.append((None, None, t))
+                continue
 
-        # Tokenize batch secara paralel
+            with_glossary = apply_glossary_source(norm_t, glossary or {})
+            segments = split_sentences(with_glossary)
+
+            start = len(all_segments)
+            all_segments.extend(segments)
+            end = len(all_segments)
+            balloon_segment_slices.append((start, end, t))
+
+        if not all_segments:
+            return list(texts)
+
+        # 2. Kirim semua segmen ke NLLB per chunk 16 (agar beam search num_beams=4 aman di GPU 4 GB)
+        CHUNK_SIZE = 16
         self.tokenizer.src_lang = source
-        inputs = self.tokenizer(
-            sub_texts,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=128
-        ).to(self.device)
-
         forced_bos_token_id = self.tokenizer.convert_tokens_to_ids(target)
+        translated_segments: List[str] = []
 
-        with torch.no_grad():
-            translated_tokens = self.model.generate(
-                **inputs,
-                forced_bos_token_id=forced_bos_token_id,
-                max_length=128,
-                no_repeat_ngram_size=3,
-                repetition_penalty=self.repetition_penalty,
-                num_beams=self.num_beams
+        for c_idx in range(0, len(all_segments), CHUNK_SIZE):
+            chunk = all_segments[c_idx:c_idx + CHUNK_SIZE]
+            inputs = self.tokenizer(
+                chunk,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=128
+            ).to(self.device)
+
+            with torch.no_grad():
+                translated_tokens = self.model.generate(
+                    **inputs,
+                    forced_bos_token_id=forced_bos_token_id,
+                    max_length=128,
+                    no_repeat_ngram_size=3,
+                    repetition_penalty=self.repetition_penalty,
+                    num_beams=self.num_beams
+                )
+
+            batch_results = self.tokenizer.batch_decode(
+                translated_tokens, skip_special_tokens=True
             )
+            for res_text in batch_results:
+                translated_segments.append(self._clean_translated_text(res_text))
 
-        batch_results = self.tokenizer.batch_decode(
-            translated_tokens, skip_special_tokens=True
-        )
-
-        # Petakan kembali dan bersihkan halusinasi
-        final_results = list(texts)
-        for idx, res_text in zip(valid_indices, batch_results):
-            final_results[idx] = self._clean_translated_text(res_text)
+        # 3. Gabungkan kembali per balon dengan spasi
+        final_results: List[str] = []
+        for start, end, orig in balloon_segment_slices:
+            if start is None:
+                final_results.append(orig)
+            else:
+                segs = translated_segments[start:end]
+                combined = " ".join([s for s in segs if s.strip()])
+                final_results.append(combined)
 
         return final_results
 
@@ -295,12 +313,15 @@ class MangaTranslator:
 
         chosen_backend = backend.lower() if backend else "auto"
 
+        # Normalisasi teks sebelum proses penerjemahan (baik LLM maupun NLLB)
+        normalized_texts = [normalize_ocr_text(t) if t else "" for t in texts]
+
         if chosen_backend in ["llm", "auto"]:
             try:
                 # LLM mendukung terjemahan ke Bahasa Indonesia maupun English
                 if (tgt_lang or self.default_tgt_lang) in ["ind_Latn", "eng_Latn"]:
                     results = self.llm.translate_bubbles(
-                        texts=texts,
+                        texts=normalized_texts,
                         src_lang=src_lang or self.default_src_lang,
                         tgt_lang=tgt_lang or self.default_tgt_lang,
                         series_hint=series_hint,
