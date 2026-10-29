@@ -460,7 +460,7 @@ class MangaTranslator:
                 combined = " ".join([s for s in segs if s.strip()])
                 # Pasca-pemrosesan khusus Indonesia: perbaiki pronoun, nama, kosakata NLLB
                 if target == "ind_Latn" and combined:
-                    combined = postprocess_nllb_indonesian(combined, src_lang=source)
+                    combined = postprocess_nllb_indonesian(combined, src_lang=source, src_text=orig)
                 final_results.append(combined)
 
         return final_results

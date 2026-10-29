@@ -137,12 +137,27 @@ class TranslationEngine:
         glossary_terms = set(active_glossary.keys())
 
         # 1. OCR teks dan Filter sebelum translate
+        effective_lang_hint = doc_lang_hint
+        if effective_lang_hint is None and bubbles:
+            sample_candidates = [b for b in bubbles if b.get("type") not in ["free_text", "text_free"]][:3]
+            if sample_candidates:
+                sample_texts = []
+                for sb in sample_candidates:
+                    engine_rap = self.ocr.rapid_ocr_en or self.ocr.rapid_ocr
+                    res_rap, _ = engine_rap(sb["crop"])
+                    if res_rap:
+                        sample_texts.append(" ".join([r[1] for r in res_rap]))
+                if sample_texts:
+                    detected_early = detect_document_language(sample_texts)
+                    if detected_early == "eng_Latn":
+                        effective_lang_hint = "eng_Latn"
+
         raw_candidates = []
         for b in bubbles:
             # Lewati type=="free_text" / "text_free" secara default (kecuali translate_free_text=True) agar tidak menimpa SFX
             if not translate_free_text and b.get("type") in ["free_text", "text_free"]:
                 continue
-            raw = self.ocr.read_text(b["crop"], lang_hint=doc_lang_hint)
+            raw = self.ocr.read_text(b["crop"], lang_hint=effective_lang_hint)
             if raw and raw.strip():
                 # Jika tidak mengaktifkan terjemahan SFX dan teks terbaca adalah onomatope/SFX murni (kana pendek), lewati
                 if not translate_free_text:

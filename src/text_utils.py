@@ -368,7 +368,7 @@ SUPPLEMENTAL_VOCAB: Dict[str, int] = {
     # Interjeksi dan onomatope komik umum
     'oh': 500000000, 'ah': 300000000, 'eh': 200000000, 'uh': 200000000, 'um': 200000000,
     'yeah': 400000000, 'yep': 100000000, 'nope': 100000000, 'huh': 150000000, 'whoa': 80000000,
-    'wow': 150000000, 'hey': 300000000, 'ok': 400000000, 'okay': 350000000,
+    'wow': 150000000, 'hey': 300000000, 'ok': 400000000, 'okay': 350000000, 'tch': 500000000,
     # Kosakata komik & ejaan Amerika
     'harbor': 150000000, 'harbors': 50000000,
     # Kontraksi bahasa Inggris standar
@@ -793,10 +793,19 @@ _NLLB_EN_TO_ID_SUBS: List[Tuple[re.Pattern, str]] = [
     (re.compile(r'\bseorang\s+koto-chan\b', re.IGNORECASE), 'Makoto-chan'),
     (re.compile(r'\brumah\s+bagi\s+(?:tiga|3)\s+orang\b', re.IGNORECASE), 'rumah bagi 300 orang'),
     (re.compile(r'\bterras\s+futaiwa\b', re.IGNORECASE), 'Futaiwa Terrace'),
+    # Marine biology & comic fishery context (Turbo cornutus / sazae)
+    (re.compile(r'\bturban\s+tanduk\b', re.IGNORECASE), 'siput bertanduk'),
+    (re.compile(r'\banchovies\b', re.IGNORECASE), 'ikan teri'),
+    (re.compile(r'\banchovy\b', re.IGNORECASE), 'ikan teri'),
+    (re.compile(r'\b(?:hari\s+ini\s+)?(?:aku\s+(?:punya|mendapat|dapat)\s+|1071\s+)(?:anchovies|ikan\s+teri)\b', re.IGNORECASE), 'Hari ini aku dapat ikan teri'),
+    (re.compile(r'\bwa-\s*apa\s+tangkapan\s+besar[.!]*\b', re.IGNORECASE), 'Wah, hasil tangkapan yang besar!'),
+    (re.compile(r'^(?:TCH!?|Chi!?|Tech!?)$', re.IGNORECASE), 'Cih!'),
+    (re.compile(r'!\.+$'), '!'),
+    (re.compile(r'\btsubai\s+hugo\b', re.IGNORECASE), 'Tsubai Chugo'),
 ]
 
 
-def postprocess_nllb_indonesian(text: str, src_lang: Optional[str] = None) -> str:
+def postprocess_nllb_indonesian(text: str, src_lang: Optional[str] = None, src_text: Optional[str] = None) -> str:
     """
     Pasca-pemrosesan output NLLB untuk Bahasa Indonesia manga/komik:
     - Koreksi pronoun register: saya/Anda → aku/kamu (gaya dialog komik santai)
@@ -806,6 +815,10 @@ def postprocess_nllb_indonesian(text: str, src_lang: Optional[str] = None) -> st
     """
     if not text:
         return text
+
+    # Onomatope interjeksi komik: TCH! / Chi -> Cih!
+    if src_text and re.match(r'^(?:tch|tcci|chi)[!.\s]*$', src_text.strip(), re.IGNORECASE):
+        return "Cih!"
 
     result = text
 
@@ -880,6 +893,15 @@ def post_process_latin_ocr(
     t = re.sub(r'\bshouldnt\b', "shouldn't", t)
 
     # Ligatur & salah-baca khas tipografi komik
+    t = re.sub(r'^[TtlI][!\.\s]\s*(?=A\s*LOCAL\b)', '', t, flags=re.I)
+    t = re.sub(r'\b(?:1071|6071|Go1)\b', 'I got', t, flags=re.I)
+    t = re.sub(r'\bI\s+(?:1071|6071|Go1)\b', 'I got', t, flags=re.I)
+    t = re.sub(r'\b(?:TCCI|TCHI|TCH\'|Tch\')\b', 'TCH!', t, flags=re.I)
+    t = re.sub(r'\((\d+)[Tt]\)', r'(\g<1>7)', t)
+    t = re.sub(r'\bTSUBAI\s+CHUGO\s*\([38][Tt7]\)', 'TSUBAI CHUGO (37)', t, flags=re.I)
+    t = re.sub(r'\bTSUBAI\s+HUGO\b', 'TSUBAI CHUGO', t, flags=re.I)
+    t = re.sub(r'\bpho\s+net\b', 'phone', t, flags=re.I)
+    t = re.sub(r'\b([1-9])([oO]{2,})\b', lambda m: m.group(1) + '0' * len(m.group(2)), t)
     t = re.sub(r'\b50,\s*', 'So, ', t)
     t = re.sub(r'\b50\b(?=\s+[A-Za-z])', 'So', t)
     t = re.sub(r'\bISWMTHHIS\b|\bismthhis\b|\biswthhis\b', 'is with his', t, flags=re.I)

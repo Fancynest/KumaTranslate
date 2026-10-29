@@ -152,9 +152,10 @@ class MultiLingualOCR:
         rapid_res, _ = engine_lat(prep_np)
         rapid_text = " ".join([item[1] for item in rapid_res]).strip() if rapid_res else ""
 
-        from src.text_utils import count_english_words, calculate_ocr_quality
-        en_words = count_english_words(rapid_text)
-        q = calculate_ocr_quality(rapid_text)
+        from src.text_utils import count_english_words, calculate_ocr_quality, split_concatenated_words
+        prep_split = split_concatenated_words(rapid_text)
+        en_words = max(count_english_words(rapid_text), count_english_words(prep_split))
+        q = max(calculate_ocr_quality(rapid_text), calculate_ocr_quality(prep_split))
         has_latin = bool(re.search(r'[a-zA-Z]{2,}', rapid_text))
 
         # Jika RapidOCR mendeteksi kata-kata kamus bahasa Inggris dengan meyakinkan:
@@ -169,13 +170,15 @@ class MultiLingualOCR:
         latin_chars = len(re.findall(r'[a-zA-Z\uFF21-\uFF3A\uFF41-\uFF5A]', manga_text))
 
         # Hanya terima Manga-OCR jika benar-benar teks Jepang:
-        # Mengandung Kanji, atau minimal 2 karakter Kana, atau proporsi CJK lebih tinggi dari Latin.
-        # Cegah menerima halusinasi Manga-OCR yang berupa deretan huruf Latin dengan 1 stray kana.
+        # - Memiliki minimal 2 karakter Kana (Jepang asli hampir selalu punya partikel/hiragana/katakana)
+        # - Atau Kanji bersama Kana
+        # - Jika hanya Kanji tanpa Kana, JANGAN terima jika RapidOCR sudah menemukan teks Latin yang jelas
+        #   (mencegah halusinasi tanggal Manga-OCR seperti １０月２０日 pada border komik Barat)
         is_genuine_japanese = (
-            re.search(r'[\u4e00-\u9fff]', manga_text) is not None or
             kana_chars >= 2 or
-            (kana_chars >= 1 and latin_chars == 0) or
-            (cjk_chars > latin_chars and cjk_chars >= 2)
+            (kana_chars >= 1 and re.search(r'[\u4e00-\u9fff]', manga_text) is not None) or
+            (re.search(r'[\u4e00-\u9fff]', manga_text) is not None and not has_latin) or
+            (cjk_chars > latin_chars * 2 and cjk_chars >= 2)
         )
 
         if is_genuine_japanese:
