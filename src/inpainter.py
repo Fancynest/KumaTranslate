@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 from PIL import Image
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 class MangaInpainter:
     def __init__(self):
@@ -9,26 +9,31 @@ class MangaInpainter:
         Inpainter presisi goresan tinta (Stroke-Level Inpainting):
         - HANYA mendeteksi & menghapus goresan tinta teks di dalam balon kata
         - TIDAK PERNAH membuat kotak putih
-        - TIDAK PERNAH menyentuh garis gambar karakter, wajah, atau rambut komik
+        - TIDAK PERNAH menyentuh garis gambar karakter, wajah, atau border balon komik
         """
         pass
 
-    def clean_bubbles(self, image: Image.Image, bboxes: List[Tuple[int, int, int, int]]) -> Image.Image:
+    def clean_bubbles(
+        self,
+        image: Image.Image,
+        bboxes: List[Tuple[int, int, int, int]],
+        masks: Optional[List[np.ndarray]] = None
+    ) -> Image.Image:
         """
         Menghapus goresan teks dialog asli menggunakan Navier-Stokes Inpainting presisi tinggi.
+        Menggunakan batas bubble bounds dan bubble_mask flood-fill agar border hitam balon 
+        dan artwork karakter di luar balon tidak pernah terhapus.
         """
         img_np = np.array(image.convert("RGB"))
         gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
         clean_img = img_np.copy()
         h_img, w_img = gray.shape
 
-        for (x, y, w, h) in bboxes:
-            # Berikan padding tipis untuk mengcover ujung goresan huruf
-            pad = max(2, int(min(w, h) * 0.08))
-            x1 = max(0, x - pad)
-            y1 = max(0, y - pad)
-            x2 = min(w_img, x + w + pad)
-            y2 = min(h_img, y + h + pad)
+        for i, (x, y, w, h) in enumerate(bboxes):
+            x1 = max(0, x)
+            y1 = max(0, y)
+            x2 = min(w_img, x + w)
+            y2 = min(h_img, y + h)
 
             if x2 <= x1 or y2 <= y1:
                 continue
@@ -44,11 +49,19 @@ class MangaInpainter:
                 mask = (roi_gray > 165).astype(np.uint8) * 255
             else:
                 # Balon putih standar dengan teks hitam:
-                # Teks adalah pixel yang secara signifikan lebih gelap dari background balon
                 thresh_val = min(175, int(bg_val - 35))
                 mask = (roi_gray < thresh_val).astype(np.uint8) * 255
 
-            # 2. Pastikan mask hanya berisi goresan teks (bukan seluruh area)
+            # 2. Jika mask flood fill tersedia, kunci agar inpainting hanya berlaku di dalam balon
+            if masks is not None and i < len(masks) and masks[i] is not None:
+                roi_bubble_mask = masks[i][y1:y2, x1:x2]
+                if np.any(roi_bubble_mask > 0):
+                    k_erode = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+                    eroded_bmask = cv2.erode((roi_bubble_mask > 0).astype(np.uint8), k_erode, iterations=1)
+                    mask = (mask > 0) & (eroded_bmask > 0)
+                    mask = mask.astype(np.uint8) * 255
+
+            # 3. Pastikan mask hanya berisi goresan teks (bukan seluruh area)
             mask_pixels = np.sum(mask > 0)
             if 0 < mask_pixels < (mask.size * 0.75):
                 # Dilasi kecil (2px) agar tepian anti-aliasing huruf ikut terhapus bersih

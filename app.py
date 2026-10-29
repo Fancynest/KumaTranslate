@@ -122,9 +122,10 @@ class TranslationEngine:
         if target_lang in ["eng_Latn", "both"]:
             res_en_texts = self.translator.translate_batch(raw_texts, src_lang=page_lang, tgt_lang="eng_Latn")
 
-        # 4. Inpainting: HANYA pada text_bbox (TIDAK menyentuh artwork karakter / border balon)
-        text_bboxes = [b.get("text_bbox", b["bbox"]) for b in valid_bubbles]
-        cleaned_img = self.inpainter.clean_bubbles(img, text_bboxes)
+        # 4. Inpainting: Menggunakan bounds bubble_bbox dan bubble_mask (sesuai urutan 4)
+        bubble_bboxes = [b.get("bubble_bbox", b["bbox"]) for b in valid_bubbles]
+        bubble_masks = [b.get("bubble_mask") for b in valid_bubbles]
+        cleaned_img = self.inpainter.clean_bubbles(img, bubble_bboxes, masks=bubble_masks)
 
         # 5. Typesetting: ke dalam safe bubble_bbox dengan garansi strict fitting
         output_images = {}
