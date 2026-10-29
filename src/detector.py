@@ -165,12 +165,17 @@ class BubbleDetector:
         """
         Deteksi kotak balon kata menggunakan YOLOv8.
         imgsz=1024, conf=0.25, iou=0.5.
-        Untuk gambar tinggi (webtoon, aspect ratio > 2.0), gunakan tiling vertikal + NMS
-        sesuai hasil benchmark empiris (Mean IoU 0.9427 vs 0.9076).
+        Untuk strip vertikal panjang (rasio aspek > 2.0, e.g. manhwa/webtoon), gunakan
+        tiling vertikal ber-overlap + NMS agar resolusi vertikal tidak terkompresi.
         """
         model = self._get_yolo_model()
         if model is None:
             return []
+
+        names = model.names or {}
+        has_text_bubble = any(str(v).lower() == "text_bubble" for v in names.values())
+        if not has_text_bubble:
+            print(f"[YOLO] Kelas 'text_bubble' tidak ditemukan dalam model.names ({names}). Memperlakukan semua kelas sebagai balon kata.")
 
         h_orig, w_orig = img_rgb.shape[:2]
         aspect_ratio = max(h_orig, w_orig) / max(1, min(h_orig, w_orig))
@@ -190,7 +195,8 @@ class BubbleDetector:
                 results = model.predict(tile, imgsz=1024, conf=0.25, iou=0.5, verbose=False)
                 for b in results[0].boxes:
                     cls_id = int(b.cls[0])
-                    cls_name = model.names.get(cls_id, "text_bubble")
+                    raw_name = str(names.get(cls_id, cls_id))
+                    cls_name = raw_name if (has_text_bubble and raw_name.lower() == "text_bubble") else "text_bubble"
                     conf = float(b.conf[0])
                     x1, y1, x2, y2 = [int(v) for v in b.xyxy[0].tolist()]
                     tiled_candidates.append([x1, y1 + y_start, x2 - x1, y2 - y1, cls_name, conf])
@@ -214,7 +220,8 @@ class BubbleDetector:
         bubble_boxes = []
         for b in results[0].boxes:
             cls_id = int(b.cls[0])
-            cls_name = model.names.get(cls_id, "text_bubble")
+            raw_name = str(names.get(cls_id, cls_id))
+            cls_name = raw_name if (has_text_bubble and raw_name.lower() == "text_bubble") else "text_bubble"
             conf = float(b.conf[0])
             x1, y1, x2, y2 = [int(v) for v in b.xyxy[0].tolist()]
             bw = max(4, x2 - x1)
@@ -223,85 +230,183 @@ class BubbleDetector:
 
         return bubble_boxes
 
+    def _find_largest_inscribed_rectangle(
+        self,
+        mask: np.ndarray,
+        text_bbox: Optional[Tuple[int, int, int, int]] = None
+    ) -> Tuple[int, int, int, int]:
+        """
+        Menemukan rectangle (x, y, w, h) terbesar yang 100% berada di dalam mask (mask == 255).
+        Menggunakan algoritma histogram maksimal dalam O(H x W).
+        Jika text_bbox diberikan, beri prioritas pada rectangle yang melingkupi/berpusat pada text_bbox.
+        """
+        bin_mask = (mask > 0).astype(np.int32)
+        H, W = bin_mask.shape
+        if H == 0 or W == 0 or np.sum(bin_mask) == 0:
+            return (0, 0, 0, 0)
+
+        heights = np.zeros(W, dtype=np.int32)
+        best_rect = (0, 0, 0, 0)
+        best_score = -1.0
+
+        tx, ty, tw, th = text_bbox if text_bbox is not None else (0, 0, 0, 0)
+        tcx, tcy = tx + tw / 2.0, ty + th / 2.0
+
+        for y in range(H):
+            heights = np.where(bin_mask[y, :] == 1, heights + 1, 0)
+            stack = []
+            for x in range(W + 1):
+                cur_h = heights[x] if x < W else 0
+                while stack and heights[stack[-1]] >= cur_h:
+                    h = heights[stack.pop()]
+                    w = x if not stack else x - stack[-1] - 1
+                    rx = stack[-1] + 1 if stack else 0
+                    ry = y - h + 1
+
+                    area = w * h
+                    if area <= 0:
+                        continue
+
+                    if text_bbox is not None and tw > 0 and th > 0:
+                        ix1 = max(rx, tx)
+                        iy1 = max(ry, ty)
+                        ix2 = min(rx + w, tx + tw)
+                        iy2 = min(ry + h, ty + th)
+                        inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+                        containment = inter / float(tw * th)
+
+                        rcx, rcy = rx + w / 2.0, ry + h / 2.0
+                        dist = np.hypot(rcx - tcx, rcy - tcy)
+                        dist_penalty = dist / max(1.0, np.hypot(W, H))
+
+                        score = float(area) * (1.0 + 2.0 * containment) * (1.0 - 0.2 * dist_penalty)
+                    else:
+                        score = float(area)
+
+                    if score > best_score:
+                        best_score = score
+                        best_rect = (int(rx), int(ry), int(w), int(h))
+
+                stack.append(x)
+
+        return best_rect
+
     def _compute_bubble_mask(
         self,
         gray: np.ndarray,
-        cluster_bbox: Tuple[int, int, int, int]
+        text_bbox: Tuple[int, int, int, int],
+        roi_bbox: Optional[Tuple[int, int, int, int]] = None,
+        font_size: Optional[float] = None
     ) -> Tuple[np.ndarray, Tuple[int, int, int, int]]:
         """
-        Hitung bubble mask lewat flood fill presisi tinggi.
-        Flood fill mencari warna latar putih di dalam balon dan berhenti tepat pada outline hitam (<150).
+        Hitung bubble mask berbasis komponen terang terhubung (bright connected component):
+        1. ROI dibatasi oleh roi_bbox (dari YOLO) atau ekspansi bertahap dari text_bbox.
+        2. Kecerahan interior diukur dari area text_bbox (garansi berada di dalam balon).
+        3. Thresholding adaptif untuk mengekstrak interior terang balon.
+        4. Morphological opening untuk memutus ekor tipis dan celah sempit outline balon.
+        5. Ekstraksi komponen terang yang melingkupi/berpusat pada text_bbox.
+        6. safe_bbox dihitung sebagai persegi terbesar yang 100% berada di dalam mask.
         """
-        h_img, w_img = gray.shape
-        bx, by, bw, bh = cluster_bbox
+        h_img, w_img = gray.shape[:2]
+        tx, ty, tw, th = text_bbox
 
-        pad_x = max(10, int(bw * 0.40))
-        pad_y = max(8, int(bh * 0.25))
-        x1 = max(0, bx - pad_x)
-        y1 = max(0, by - pad_y)
-        x2 = min(w_img, bx + bw + pad_x)
-        y2 = min(h_img, by + bh + pad_y)
+        # 1. Batasi ROI
+        if roi_bbox is not None:
+            bx, by, bw, bh = roi_bbox
+            pad_x = max(4, int(bw * 0.05))
+            pad_y = max(4, int(bh * 0.05))
+            rx1 = max(0, min(bx, tx) - pad_x)
+            ry1 = max(0, min(by, ty) - pad_y)
+            rx2 = min(w_img, max(bx + bw, tx + tw) + pad_x)
+            ry2 = min(h_img, max(by + bh, ty + th) + pad_y)
+        else:
+            # Ekspansi bertahap dari text_bbox berbasis ukuran huruf
+            f_size = font_size if font_size is not None else max(8.0, float(min(tw, th) * 0.5))
+            pad_x = max(16, int(f_size * 2.5), int(tw * 0.40))
+            pad_y = max(14, int(f_size * 2.0), int(th * 0.35))
+            rx1 = max(0, tx - pad_x)
+            ry1 = max(0, ty - pad_y)
+            rx2 = min(w_img, tx + tw + pad_x)
+            ry2 = min(h_img, ty + th + pad_y)
 
-        roi_gray = gray[y1:y2, x1:x2]
+        roi_gray = gray[ry1:ry2, rx1:rx2]
         rh, rw = roi_gray.shape
-
-        rel_x = bx - x1
-        rel_y = by - y1
-        text_roi = roi_gray[rel_y:rel_y+bh, rel_x:rel_x+bw]
-
-        # Cari titik awal (seed) berpixel putih di dalam balon
-        pts = np.argwhere(text_roi > 190)
-        if len(pts) == 0:
-            pts = np.argwhere(text_roi > 160)
-
-        if len(pts) == 0:
+        if rh < 4 or rw < 4:
             mask_full = np.zeros((h_img, w_img), dtype=np.uint8)
-            mask_full[by:by+bh, bx:bx+bw] = 255
-            return mask_full, cluster_bbox
+            mask_full[ty:ty+th, tx:tx+tw] = 255
+            return mask_full, text_bbox
 
-        sy, sx = pts[0] + [rel_y, rel_x]
+        rel_tx = max(0, tx - rx1)
+        rel_ty = max(0, ty - ry1)
+        rel_tw = min(rw - rel_tx, tw)
+        rel_th = min(rh - rel_ty, th)
 
-        # Penghalang batas hitam balon (<150)
-        barrier = (roi_gray < 150).astype(np.uint8)
+        # 2. Ukur kecerahan interior di dalam text_bbox (seed area)
+        text_roi = roi_gray[rel_ty:rel_ty+rel_th, rel_tx:rel_tx+rel_tw]
+        if text_roi.size > 0:
+            bg_bright = float(np.percentile(text_roi, 85))
+        else:
+            bg_bright = float(np.percentile(roi_gray, 85))
 
-        flood_mask = np.zeros((rh + 2, rw + 2), np.uint8)
-        flood_mask[1:-1, 1:-1] = barrier
-        # Hilangkan barrier pada teks agar floodfill bisa merambat di antara huruf
-        flood_mask[rel_y+1:rel_y+bh+1, rel_x+1:rel_x+bw+1] = 0
+        # Ambang adaptif relatif terhadap kecerahan interior
+        thresh = max(130, int(bg_bright - 35))
+        bright_mask = (roi_gray >= thresh).astype(np.uint8) * 255
 
-        # Jalankan flood fill
-        cv2.floodFill(roi_gray.copy(), flood_mask, (sx, sy), 255, loDiff=35, upDiff=35, flags=cv2.FLOODFILL_MASK_ONLY | (255 << 8))
+        # 3. Morphological opening untuk memutus ekor tipis dan celah pada outline
+        k_size = 5 if min(rh, rw) >= 120 else 3
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_size, k_size))
+        bright_opened = cv2.morphologyEx(bright_mask, cv2.MORPH_OPEN, kernel)
 
-        filled_roi = (flood_mask[1:-1, 1:-1] == 255).astype(np.uint8)
-        ys, xs = np.where(filled_roi > 0)
+        # 4. Connected Components pada komponen terang
+        num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(bright_opened)
 
-        if len(xs) > 0:
-            fb_x = x1 + int(xs.min())
-            fb_y = y1 + int(ys.min())
-            fb_w = int(xs.max() - xs.min() + 1)
-            fb_h = int(ys.max() - ys.min() + 1)
+        best_label = 0
+        # Cari komponen yang paling banyak menempati text_roi
+        if rel_tw > 0 and rel_th > 0:
+            text_labels = labels[rel_ty:rel_ty+rel_th, rel_tx:rel_tx+rel_tw]
+            non_zero = text_labels[text_labels > 0]
+            if len(non_zero) > 0:
+                counts = np.bincount(non_zero)
+                best_label = int(np.argmax(counts))
 
-            # Cek jika flood fill bocor ke margin terbuka halaman
-            is_leaked = (fb_w >= rw - 2 and fb_h >= rh - 2) or (fb_w > w_img * 0.70) or (fb_h > h_img * 0.70)
-            if is_leaked:
-                pad = max(4, int(min(bw, bh) * 0.15))
-                tight_x = max(0, bx - pad)
-                tight_y = max(0, by - pad)
-                tight_w = min(w_img - tight_x, bw + 2 * pad)
-                tight_h = min(h_img - tight_y, bh + 2 * pad)
-                safe_bbox = (tight_x, tight_y, tight_w, tight_h)
-                mask_full = np.zeros((h_img, w_img), dtype=np.uint8)
-                mask_full[tight_y:tight_y+tight_h, tight_x:tight_x+tight_w] = 255
-                return mask_full, safe_bbox
+        # Fallback jika text_labels kosong: cari komponen terdekat dengan pusat text_bbox / ROI
+        if best_label == 0:
+            tcx = rel_tx + rel_tw / 2.0 if rel_tw > 0 else rw / 2.0
+            tcy = rel_ty + rel_th / 2.0 if rel_th > 0 else rh / 2.0
+            min_dist = float('inf')
+            for lbl in range(1, num_labels):
+                cx, cy = centroids[lbl]
+                d = np.hypot(cx - tcx, cy - tcy)
+                if d < min_dist:
+                    min_dist = d
+                    best_label = lbl
 
-            safe_bbox = (fb_x, fb_y, max(bw, fb_w), max(bh, fb_h))
-            mask_full = np.zeros((h_img, w_img), dtype=np.uint8)
-            mask_full[y1:y2, x1:x2] = filled_roi * 255
-            return mask_full, safe_bbox
+        if best_label > 0:
+            bubble_roi = (labels == best_label).astype(np.uint8) * 255
+            # Pulihkan tepi yang tererosi dengan dilasi terbatas pada bright_mask
+            bubble_roi = cv2.morphologyEx(bubble_roi, cv2.MORPH_DILATE, kernel)
+            bubble_roi = cv2.bitwise_and(bubble_roi, bright_mask)
+            # Tutup celah teks di dalam balon
+            k_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (max(5, k_size + 2), max(5, k_size + 2)))
+            bubble_roi = cv2.morphologyEx(bubble_roi, cv2.MORPH_CLOSE, k_close)
+        else:
+            bubble_roi = np.zeros((rh, rw), dtype=np.uint8)
+            bubble_roi[rel_ty:rel_ty+rel_th, rel_tx:rel_tx+rel_tw] = 255
+
+        # 5. Hitung safe_bbox sebagai rectangle terbesar yang PASTI di dalam mask
+        srx, sry, srw, srh = self._find_largest_inscribed_rectangle(
+            bubble_roi, (rel_tx, rel_ty, rel_tw, rel_th)
+        )
+
+        if srw < 4 or srh < 4:
+            safe_bbox = text_bbox
+        else:
+            safe_bbox = (int(rx1 + srx), int(ry1 + sry), int(srw), int(srh))
 
         mask_full = np.zeros((h_img, w_img), dtype=np.uint8)
-        mask_full[by:by+bh, bx:bx+bw] = 255
-        return mask_full, cluster_bbox
+        mask_full[ry1:ry2, rx1:rx2] = bubble_roi
+
+        return mask_full, safe_bbox
 
     def _cluster_heuristic_boxes(self, boxes: List[Tuple[int, int, int, int]], gray: np.ndarray) -> List[Tuple[int, int, int, int]]:
         """
@@ -406,10 +511,13 @@ class BubbleDetector:
         clusters = self._cluster_heuristic_boxes(filtered_boxes, gray)
         clusters.sort(key=lambda b: (b[1] // max(30, h_orig // 8), -b[0]))
 
+        box_min_dims = [min(b[2], b[3]) for b in filtered_boxes]
+        median_font_size = float(np.median(box_min_dims)) if box_min_dims else 14.0
+
         bubbles = []
         for text_box in clusters:
             bx, by, bw, bh = text_box
-            bubble_mask, safe_bbox = self._compute_bubble_mask(gray, text_box)
+            bubble_mask, safe_bbox = self._compute_bubble_mask(gray, text_box, roi_bbox=None, font_size=median_font_size)
 
             pad = max(2, int(min(bw, bh) * 0.15))
             px = max(0, bx - pad)
@@ -464,6 +572,8 @@ class BubbleDetector:
 
         # 1. Dapatkan baris teks dari detektor teks (RapidOCR DBNet)
         raw_text_boxes = self._detect_raw_boxes(img_rgb)
+        box_min_dims = [min(b[2], b[3]) for b in raw_text_boxes]
+        median_font_size = float(np.median(box_min_dims)) if box_min_dims else 14.0
 
         # 2. Cek apakah mode memaksa heuristik
         if self.mode == "heuristic":
@@ -538,8 +648,13 @@ class BubbleDetector:
                 pad_h = int(bh * 0.15)
                 text_bbox = (bx + pad_w, by + pad_h, max(4, bw - 2 * pad_w), max(4, bh - 2 * pad_h))
 
-            # Hitung bubble mask dan safe_bbox lewat flood fill
-            bubble_mask, safe_bbox = self._compute_bubble_mask(gray, yb)
+            # Hitung bubble mask dan safe_bbox berbasis bright connected components
+            bubble_mask, safe_bbox = self._compute_bubble_mask(
+                gray=gray,
+                text_bbox=text_bbox,
+                roi_bbox=yb,
+                font_size=median_font_size
+            )
 
             # Crop teks untuk OCR (gunakan text_bbox dengan padding kecil)
             cx, cy, cw, ch = text_bbox
@@ -555,9 +670,9 @@ class BubbleDetector:
                 "bubble_bbox": yb,
                 "safe_bbox": safe_bbox,
                 "bubble_mask": bubble_mask,
-                "bbox": yb,
+                "bbox": safe_bbox,
                 "crop": Image.fromarray(crop_rgb),
-                "area": bw * bh,
+                "area": safe_bbox[2] * safe_bbox[3],
                 "source": "yolo",
                 "type": "text_bubble"
             })
@@ -573,7 +688,12 @@ class BubbleDetector:
                 if (fw * fh) > (w_orig * h_orig * 0.35):
                     continue
 
-                free_mask, free_safe_bbox = self._compute_bubble_mask(gray, fc)
+                free_mask, free_safe_bbox = self._compute_bubble_mask(
+                    gray=gray,
+                    text_bbox=fc,
+                    roi_bbox=None,
+                    font_size=median_font_size
+                )
 
                 crop_pad = max(2, int(min(fw, fh) * 0.12))
                 px = max(0, fx - crop_pad)
@@ -589,7 +709,7 @@ class BubbleDetector:
                     "bubble_mask": free_mask,
                     "bbox": free_safe_bbox,
                     "crop": Image.fromarray(crop_rgb),
-                    "area": fw * fh,
+                    "area": free_safe_bbox[2] * free_safe_bbox[3],
                     "source": "yolo",
                     "type": "free_text"
                 })
