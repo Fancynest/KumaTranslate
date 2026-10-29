@@ -242,7 +242,8 @@ class TranslationEngine:
             for b, t_id, _ in active_bubbles:
                 if t_id.strip():
                     render_box = b.get("safe_bbox", b.get("bubble_bbox", b["bbox"]))
-                    img_id = self.renderer.render_bubble_text(img_id, render_box, t_id)
+                    b_mask = b.get("bubble_mask")
+                    img_id = self.renderer.render_bubble_text(img_id, render_box, t_id, bubble_mask=b_mask)
             output_images["ind_Latn"] = img_id
 
         if target_lang in ["eng_Latn", "both"]:
@@ -250,7 +251,8 @@ class TranslationEngine:
             for b, _, t_en in active_bubbles:
                 if t_en.strip():
                     render_box = b.get("safe_bbox", b.get("bubble_bbox", b["bbox"]))
-                    img_en = self.renderer.render_bubble_text(img_en, render_box, t_en)
+                    b_mask = b.get("bubble_mask")
+                    img_en = self.renderer.render_bubble_text(img_en, render_box, t_en, bubble_mask=b_mask)
             output_images["eng_Latn"] = img_en
 
         # 6. Susun Debug Dump JSON (bubble_id, bbox, text_bbox, type, source, ocr_text, translation)
