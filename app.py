@@ -122,21 +122,12 @@ class TranslationEngine:
         if target_lang in ["eng_Latn", "both"]:
             res_en_texts = self.translator.translate_batch(raw_texts, src_lang=page_lang, tgt_lang="eng_Latn")
 
-        # 4. Inpainting: Bersihkan teks asli
-        #    - text_bubble: bersihkan goresan teks di seluruh rongga balon kata (bubble_bbox + bubble_mask)
-        #      sehingga tidak ada goresan kana/kanji yang tertinggal meskipun ada baris yang terlewat.
-        #    - free_text: bersihkan hanya di area text_bbox agar tidak merusak artwork sekitar.
-        inpaint_boxes = []
-        inpaint_masks = []
-        for b in valid_bubbles:
-            if b.get("type") == "text_bubble":
-                inpaint_boxes.append(b.get("bubble_bbox", b["bbox"]))
-                inpaint_masks.append(b.get("bubble_mask"))
-            else:
-                inpaint_boxes.append(b.get("text_bbox", b["bbox"]))
-                inpaint_masks.append(b.get("bubble_mask"))
-
-        cleaned_img = self.inpainter.clean_bubbles(img, inpaint_boxes, masks=inpaint_masks)
+        # 4. Inpainting: Hapus teks asli dengan presisi goresan tinta (text_bbox)
+        #    Menggunakan text_bbox memastikan inpainting hanya menyentuh goresan huruf asli,
+        #    dan connected-components filter menjamin border panel dan rambut karakter tidak pernah terhapus.
+        text_bboxes = [b["text_bbox"] for b in valid_bubbles]
+        bubble_masks = [b.get("bubble_mask") for b in valid_bubbles]
+        cleaned_img = self.inpainter.clean_bubbles(img, text_bboxes, masks=bubble_masks)
 
         # 5. Typesetting: Render teks terjemahan ke dalam safe_bbox (rongga dalam balon kata)
         #    Teks terjemahan horizontal (Indonesia / Inggris) membutuhkan ruang lebar balon kata.
