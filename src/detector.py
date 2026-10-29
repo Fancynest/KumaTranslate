@@ -577,11 +577,10 @@ class BubbleDetector:
             bx, by, bw, bh = text_box
             bubble_mask, safe_bbox = self._compute_bubble_mask(gray, text_box, roi_bbox=None, font_size=median_font_size)
 
-            pad = max(2, int(min(bw, bh) * 0.15))
-            px = max(0, bx - pad)
-            py = max(0, by - pad)
-            pw = min(w_orig - px, bw + 2 * pad)
-            ph = min(h_orig - py, bh + 2 * pad)
+            # Crop seluruh rongga dalam balon kata (safe_bbox) untuk OCR
+            cx, cy, cw, ch = safe_bbox
+            px, py = max(0, cx), max(0, cy)
+            pw, ph = min(w_orig - px, cw), min(h_orig - py, ch)
             crop_rgb = img_rgb[py:py+ph, px:px+pw]
 
             bubbles.append({
@@ -714,13 +713,10 @@ class BubbleDetector:
                 font_size=median_font_size
             )
 
-            # Crop teks untuk OCR (gunakan text_bbox dengan padding kecil)
-            cx, cy, cw, ch = text_bbox
-            crop_pad = max(2, int(min(cw, ch) * 0.12))
-            px = max(0, cx - crop_pad)
-            py = max(0, cy - crop_pad)
-            pw = min(w_orig - px, cw + 2 * crop_pad)
-            ph = min(h_orig - py, ch + 2 * crop_pad)
+            # Crop seluruh isi rongga balon kata (safe_bbox) untuk OCR
+            cx, cy, cw, ch = safe_bbox
+            px, py = max(0, cx), max(0, cy)
+            pw, ph = min(w_orig - px, cw), min(h_orig - py, ch)
             crop_rgb = img_rgb[py:py+ph, px:px+pw]
 
             bubbles.append({

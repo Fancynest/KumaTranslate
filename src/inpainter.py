@@ -20,19 +20,57 @@ class MangaInpainter:
         masks: Optional[List[np.ndarray]] = None
     ) -> Image.Image:
         """
-        Menghapus goresan teks dialog asli menggunakan stroke-level inpainting cerdas:
-        1. Ekstraksi goresan gelap teks menggunakan threshold adaptif.
-        2. Analisis Connected Components untuk memisahkan goresan huruf dari border panel/artwork.
-        3. Pengisian goresan teks dengan warna latar belakang balon yang serasi (pure/solid fill)
-           atau Navier-Stokes pada screentone kompleks, hanya pada piksel goresan (dilated).
-        4. 100% zero-boundary-defect: Piksel di luar goresan huruf tidak pernah disentuh.
+        Menghapus goresan teks dialog asli dari balon kata:
+        1. Jika bubble_mask tersedia: erosi mask setebal outline (3px), cari seluruh piksel gelap
+           di dalam rongga balon, dilasi 2-3px untuk membersihkan fringe anti-aliasing, dan hapus/inpaint
+           seluruh goresan tanpa pernah menyentuh outline balon.
+        2. Jika bubble_mask tidak tersedia (fallback): gunakan stroke-level connected components
+           pada text_bbox.
         """
         img_np = np.array(image.convert("RGB"))
         gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
         clean_img = img_np.copy()
         h_img, w_img = gray.shape
 
+        k_erode = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        k_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+
         for i, (x, y, w, h) in enumerate(bboxes):
+            mask_full = masks[i] if (masks is not None and i < len(masks) and masks[i] is not None) else None
+
+            # Mode 1: Hapus seluruh piksel gelap di dalam bubble_mask yang di-erode setebal outline
+            if mask_full is not None and np.any(mask_full > 0):
+                eroded_mask = cv2.erode((mask_full > 0).astype(np.uint8), k_erode, iterations=1)
+                interior_idx = eroded_mask > 0
+                if not np.any(interior_idx):
+                    continue
+
+                interior_gray = gray[interior_idx]
+                bg_val = int(np.percentile(interior_gray, 92))
+                fill_color = [bg_val, bg_val, bg_val]
+
+                # Deteksi piksel gelap teks di dalam balon
+                dark_thresh = min(190, bg_val - 25)
+                dark_pixels = (gray < dark_thresh) & interior_idx
+
+                # Dilasi 2-3px untuk menangkap fringe anti-aliasing tepi goresan
+                dark_dilated = cv2.dilate(dark_pixels.astype(np.uint8), k_dilate, iterations=1)
+                dark_to_erase = (dark_dilated > 0) & interior_idx
+
+                # Isi solid fill jika warna seragam (khas manga) atau inpaint jika berpola
+                if bg_val >= 170:
+                    clean_img[dark_to_erase] = fill_color
+                else:
+                    y_indices, x_indices = np.where(interior_idx)
+                    by1, by2 = int(np.min(y_indices)), int(np.max(y_indices) + 1)
+                    bx1, bx2 = int(np.min(x_indices)), int(np.max(x_indices) + 1)
+                    roi_col = clean_img[by1:by2, bx1:bx2]
+                    roi_erase = dark_to_erase[by1:by2, bx1:bx2].astype(np.uint8)
+                    inpainted = cv2.inpaint(roi_col, roi_erase, inpaintRadius=2, flags=cv2.INPAINT_TELEA)
+                    clean_img[by1:by2, bx1:bx2][roi_erase > 0] = inpainted[roi_erase > 0]
+                continue
+
+            # Mode 2 (Fallback): Stroke-level inpainting berbasis text_bbox
             pad = max(2, int(min(w, h) * 0.08))
             x1 = max(0, x - pad)
             y1 = max(0, y - pad)
@@ -46,21 +84,17 @@ class MangaInpainter:
             roi_color = clean_img[y1:y2, x1:x2]
             rh, rw = roi_gray.shape
 
-            # 1. Tentukan kecerahan latar belakang (persentil 90)
             bg_val = int(np.percentile(roi_gray, 90))
 
             if bg_val < 110:
-                # Balon gelap / screentone hitam dengan teks putih
                 thresh_val = 165
                 raw_mask = (roi_gray > thresh_val).astype(np.uint8)
                 fill_color = [bg_val, bg_val, bg_val]
             else:
-                # Balon putih standar dengan teks hitam
                 thresh_val = min(180, int(bg_val - 30))
                 raw_mask = (roi_gray < thresh_val).astype(np.uint8)
                 fill_color = [bg_val, bg_val, bg_val]
 
-            # 2. Filter Connected Components: Pisahkan huruf teks dari border panel / rambut / artwork
             num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(raw_mask)
             clean_text_mask = np.zeros_like(raw_mask)
 
@@ -72,7 +106,6 @@ class MangaInpainter:
                 ch = stats[lbl, cv2.CC_STAT_HEIGHT]
 
                 touches_border = (cx == 0 or cy == 0 or (cx + cw) >= rw or (cy + ch) >= rh)
-                # Komponen panjang yang menempel border adalah border garis panel atau artwork luar
                 if touches_border and (cw > rw * 0.35 or ch > rh * 0.35 or area > rw * rh * 0.20):
                     continue
                 if area > (rw * rh * 0.40):
@@ -80,23 +113,12 @@ class MangaInpainter:
 
                 clean_text_mask[labels == lbl] = 255
 
-            # 3. Batasi dengan bubble_mask jika tersedia
-            if masks is not None and i < len(masks) and masks[i] is not None:
-                roi_bubble = masks[i][y1:y2, x1:x2]
-                if np.any(roi_bubble > 0):
-                    k_erode = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-                    inner_mask = cv2.erode((roi_bubble > 0).astype(np.uint8), k_erode, iterations=1)
-                    clean_text_mask = cv2.bitwise_and(clean_text_mask, clean_text_mask, mask=inner_mask)
-
-            # 4. Dilasi kecil (2-3px) untuk membersihkan tepian anti-aliasing goresan
             mask_pixels = np.sum(clean_text_mask > 0)
             if 0 < mask_pixels < (clean_text_mask.size * 0.75):
                 k_size = 2 if min(w_img, h_img) < 1000 else 3
                 kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_size, k_size))
                 mask_dilated = cv2.dilate(clean_text_mask, kernel, iterations=1)
 
-                # Jika latar balon seragam (misal putih manga >= 180), isi langsung dengan background
-                # agar 100% mulus tanpa noda/smudge telea
                 if bg_val >= 180:
                     clean_img[y1:y2, x1:x2][mask_dilated > 0] = fill_color
                 else:
