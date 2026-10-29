@@ -761,19 +761,34 @@ class BubbleDetector:
             bx, by, bw, bh = yb
             assigned_texts = list(bubble_texts[b_idx])
 
-            # Deteksi teks presisi pada potongan (crop) balon untuk menangkap baris kecil/vertikal yang terlewat pada skala penuh
-            bubble_crop = img_rgb[by:by+bh, bx:bx+bw]
-            crop_dt_boxes, _ = self.engine.text_det(bubble_crop)
-            if crop_dt_boxes is not None and len(crop_dt_boxes) > 0:
-                for b in crop_dt_boxes:
-                    xs = [pt[0] for pt in b]
-                    ys = [pt[1] for pt in b]
-                    cbx = int(max(0, min(xs)))
-                    cby = int(max(0, min(ys)))
-                    cbw = int(max(xs) - min(xs))
-                    cbh = int(max(ys) - min(ys))
-                    if cbw >= 4 and cbh >= 4:
-                        assigned_texts.append((bx + cbx, by + cby, cbw, cbh))
+            # Deteksi teks presisi pada potongan (crop) balon HANYA jika DBNet skala penuh belum menemukan teks di balon ini
+            if not assigned_texts:
+                bubble_crop = img_rgb[by:by+bh, bx:bx+bw]
+                crop_dt_boxes, _ = self.engine.text_det(bubble_crop)
+                if crop_dt_boxes is not None and len(crop_dt_boxes) > 0:
+                    for b in crop_dt_boxes:
+                        xs = [pt[0] for pt in b]
+                        ys = [pt[1] for pt in b]
+                        cbx = int(max(0, min(xs)))
+                        cby = int(max(0, min(ys)))
+                        cbw = int(max(xs) - min(xs))
+                        cbh = int(max(ys) - min(ys))
+                        cand_box = (bx + cbx, by + cby, cbw, cbh)
+                        # Pastikan kandidat tidak bertumpang tindih dengan teks balon lain
+                        is_foreign = False
+                        for other_idx, other_boxes in enumerate(bubble_texts):
+                            if other_idx == b_idx:
+                                continue
+                            for otb in other_boxes:
+                                ox, oy, ow, oh = otb
+                                if max(cand_box[0], ox) < min(cand_box[0] + cand_box[2], ox + ow) and \
+                                   max(cand_box[1], oy) < min(cand_box[1] + cand_box[3], oy + oh):
+                                    is_foreign = True
+                                    break
+                            if is_foreign:
+                                break
+                        if not is_foreign and cbw >= 4 and cbh >= 4:
+                            assigned_texts.append(cand_box)
 
             if assigned_texts:
                 # Gabungkan baris teks di dalam balon menjadi satu text_bbox
@@ -796,9 +811,24 @@ class BubbleDetector:
                 font_size=median_font_size
             )
 
+            # Mask teks milik balon tetangga/asing pada gambar crop OCR agar tidak terbaca campur aduk
+            cleaned_rgb = img_rgb.copy()
+            sx, sy, sw, sh = safe_bbox
+            for other_idx, other_boxes in enumerate(bubble_texts):
+                if other_idx == b_idx:
+                    continue
+                for otb in other_boxes:
+                    ox, oy, ow, oh = otb
+                    if max(sx, ox) < min(sx + sw, ox + ow) and max(sy, oy) < min(sy + sh, oy + oh):
+                        px1 = max(0, ox - 4)
+                        py1 = max(0, oy - 4)
+                        px2 = min(w_orig, ox + ow + 4)
+                        py2 = min(h_orig, oy + oh + 4)
+                        cleaned_rgb[py1:py2, px1:px2] = 255
+
             # Crop seluruh isi rongga balon kata (safe_bbox) untuk OCR dengan pra-proses
             crop_img = self._prepare_ocr_crop(
-                img_rgb=img_rgb,
+                img_rgb=cleaned_rgb,
                 crop_bbox=safe_bbox,
                 bubble_mask=bubble_mask,
                 font_size=median_font_size,
@@ -859,14 +889,101 @@ class BubbleDetector:
                     "type": "free_text"
                 })
 
-        # 7. Urutkan urutan baca manga (atas ke bawah, kanan ke kiri)
+        # 7. Selesaikan tabrakan antar-balon yang menempel / overlapping (connected bubbles)
+        self._resolve_connected_bubbles(bubbles)
+
+        # 8. Urutkan urutan baca manga (atas ke bawah, kanan ke kiri)
         bubbles.sort(key=lambda b: (b["bbox"][1] // max(30, h_orig // 8), -b["bbox"][0]))
 
-        # 8. Simpan debug overlay jika diminta
+        # 9. Simpan debug overlay jika diminta
         if debug:
             self._save_debug_overlay(img_rgb, bubbles, raw_text_boxes, debug_dir, image_input)
 
         return bubbles
+
+    def _resolve_connected_bubbles(self, bubbles: List[Dict[str, Any]]):
+        """
+        Selesaikan tabrakan antar-balon kata yang berdekatan atau menempel (connected bubbles):
+        Jika dua balon safe_bbox-nya bertabrakan/berpotongan, pisahkan safe_bbox dan mask
+        pada garis batas tengah antar teks, sehingga teks terjemahan kedua balon tidak pernah
+        saling menimpa (collide).
+        """
+        n = len(bubbles)
+        for i in range(n):
+            for j in range(i + 1, n):
+                b1 = bubbles[i]
+                b2 = bubbles[j]
+                if b1.get("type") != "text_bubble" or b2.get("type") != "text_bubble":
+                    continue
+                s1 = b1.get("safe_bbox")
+                s2 = b2.get("safe_bbox")
+                if not s1 or not s2:
+                    continue
+
+                xi1 = max(s1[0], s2[0])
+                yi1 = max(s1[1], s2[1])
+                xi2 = min(s1[0] + s1[2], s2[0] + s2[2])
+                yi2 = min(s1[1] + s1[3], s2[1] + s2[3])
+
+                if xi2 > xi1 and yi2 > yi1:
+                    t1 = b1["text_bbox"]
+                    t2 = b2["text_bbox"]
+                    c1x, c1y = t1[0] + t1[2] / 2.0, t1[1] + t1[3] / 2.0
+                    c2x, c2y = t2[0] + t2[2] / 2.0, t2[1] + t2[3] / 2.0
+
+                    dx = abs(c1x - c2x)
+                    dy = abs(c1y - c2y)
+
+                    if dx >= dy:
+                        # Terpisah secara dominan horizontal
+                        if c1x < c2x:
+                            left_b, right_b = b1, b2
+                        else:
+                            left_b, right_b = b2, b1
+
+                        lt = left_b["text_bbox"]
+                        rt = right_b["text_bbox"]
+                        split_x = int(((lt[0] + lt[2]) + rt[0]) / 2.0)
+
+                        ls = left_b["safe_bbox"]
+                        new_lw = max(lt[2] + 4, split_x - ls[0])
+                        left_b["safe_bbox"] = (ls[0], ls[1], new_lw, ls[3])
+                        left_b["bbox"] = left_b["safe_bbox"]
+                        if left_b.get("bubble_mask") is not None:
+                            left_b["bubble_mask"][:, split_x:] = 0
+
+                        rs = right_b["safe_bbox"]
+                        new_rx = max(rs[0], split_x)
+                        new_rw = max(rt[2] + 4, (rs[0] + rs[2]) - new_rx)
+                        right_b["safe_bbox"] = (new_rx, rs[1], new_rw, rs[3])
+                        right_b["bbox"] = right_b["safe_bbox"]
+                        if right_b.get("bubble_mask") is not None:
+                            right_b["bubble_mask"][:, :split_x] = 0
+                    else:
+                        # Terpisah secara dominan vertikal
+                        if c1y < c2y:
+                            top_b, bottom_b = b1, b2
+                        else:
+                            top_b, bottom_b = b2, b1
+
+                        tt = top_b["text_bbox"]
+                        bt = bottom_b["text_bbox"]
+                        split_y = int(((tt[1] + tt[3]) + bt[1]) / 2.0)
+
+                        ts = top_b["safe_bbox"]
+                        new_th = max(tt[3] + 4, split_y - ts[1])
+                        top_b["safe_bbox"] = (ts[0], ts[1], ts[2], new_th)
+                        top_b["bbox"] = top_b["safe_bbox"]
+                        if top_b.get("bubble_mask") is not None:
+                            top_b["bubble_mask"][split_y:, :] = 0
+
+                        bs = bottom_b["safe_bbox"]
+                        new_by = max(bs[1], split_y)
+                        new_bh = max(bt[3] + 4, (bs[1] + bs[3]) - new_by)
+                        bottom_b["safe_bbox"] = (bs[0], new_by, bs[2], new_bh)
+                        bottom_b["bbox"] = bottom_b["safe_bbox"]
+                        if bottom_b.get("bubble_mask") is not None:
+                            bottom_b["bubble_mask"][:split_y, :] = 0
 
     def _save_debug_overlay(
         self,

@@ -802,6 +802,19 @@ _NLLB_EN_TO_ID_SUBS: List[Tuple[re.Pattern, str]] = [
     (re.compile(r'^(?:TCH!?|Chi!?|Tech!?)$', re.IGNORECASE), 'Cih!'),
     (re.compile(r'!\.+$'), '!'),
     (re.compile(r'\btsubai\s+hugo\b', re.IGNORECASE), 'Tsubai Chugo'),
+    (re.compile(r'\b(?:semua\s+jalan\s+dari|seluruh\s+jalan\s+dari)\b', re.IGNORECASE), 'jauh-jauh dari'),
+    (re.compile(r'\bBisakah kau menjadi lebih baik kembar ob\b', re.IGNORECASE), 'Bisakah kamu lebih baik padanya?'),
+    (re.compile(r'\bAda sesuatu yang tidak terlalu menyukai aku\b', re.IGNORECASE), 'Firasatku mengatakan dia tidak terlalu menyukaiku.'),
+    (re.compile(r'\bSesuatu mengatakan padaku\b', re.IGNORECASE), 'Firasatku mengatakan'),
+    (re.compile(r'\bmenyukai aku\b', re.IGNORECASE), 'menyukaiku'),
+    (re.compile(r'\bjaringan pho pintar\b', re.IGNORECASE), 'smartphone canggih'),
+    (re.compile(r'\bpohon keluarga kita\b', re.IGNORECASE), 'keluarga kita'),
+    (re.compile(r'\bMereka harus tahu itu!\b', re.IGNORECASE), 'Mereka tidak perlu tahu itu!'),
+    (re.compile(r'\bPagi-pagi\.', re.IGNORECASE), 'Selamat pagi.'),
+    (re.compile(r'\bseorang koto-chan\b', re.IGNORECASE), 'Makoto-chan'),
+    (re.compile(r'\brumah bagi tiga orang\b', re.IGNORECASE), 'rumah bagi 300 orang'),
+    (re.compile(r'\bIni adalah\.\.\.$', re.IGNORECASE), 'Begitu rupanya...'),
+    (re.compile(r'\bYah dia pasti tampaknya berada di mana saja di desa ini\b', re.IGNORECASE), 'Yah, dia jelas tidak terlihat di mana pun di desa ini.'),
 ]
 
 
@@ -920,10 +933,18 @@ def post_process_latin_ocr(
     t = re.sub(r'\bOMLYNINE\b|\bomlynine\b', 'only nine', t, flags=re.I)
     t = re.sub(r'\bTAALS\b', 'tails', t, flags=re.I)
     t = re.sub(r'^[.·\s]*S\s+COMING\b', '...is coming', t, flags=re.I)
+    t = re.sub(r'^[.·\s]*S\s+COMING\s+FROM\s+(?:THE|THIS)\s+GIRL\b', '...is coming from this girl', t, flags=re.I)
     t = re.sub(r'\bSEEMTOBE\b', 'seem to be', t, flags=re.I)
     t = re.sub(r'\bNEEDTO\b', 'need to', t, flags=re.I)
     t = re.sub(r'\bINTHIS\b', 'in this', t, flags=re.I)
     t = re.sub(r'\bWHERETO\b', 'where to', t, flags=re.I)
+    t = re.sub(r'\b(?:twih\s*[hob]+|tih\s*[ab]+|ewihoi)\b', 'to him', t, flags=re.I)
+    t = re.sub(r'\bSMARTPHONET\b|\bsmartphonet\b', 'smartphone?', t, flags=re.I)
+    t = re.sub(r'\bLOOKIT\b|\blookit\b', 'look it', t, flags=re.I)
+    t = re.sub(r'\bform\s+door\b|\bform\s+my\s+dad\b', 'for my dad or', t, flags=re.I)
+    t = re.sub(r'\bcut\s+three\s+years\s+ago\b', 'cuz three years ago', t, flags=re.I)
+    t = re.sub(r'\bdefinitely\s+(?:seem|seemtobe)\s+to\.?\s*be\s+anywhere\b', "definitely doesn't seem to be anywhere", t, flags=re.I)
+    t = re.sub(r'\bISEE\.?\b', 'I see.', t)
 
     # Langkah 1: Sambung tanda hubung
     cleaned = rejoin_hyphenated_words(t)

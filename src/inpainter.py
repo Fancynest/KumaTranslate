@@ -81,6 +81,13 @@ class MangaInpainter:
                         safe_dark = (gray[sy1:sy2, sx1:sx2] < dark_thresh)
                         clean_img[sy1:sy2, sx1:sx2][safe_dark] = fill_color
 
+                # Garansi kebersihan text_bbox asli agar goresan teks lama tidak pernah tertinggal
+                tx1, ty1 = max(0, x - 2), max(0, y - 2)
+                tx2, ty2 = min(w_img, x + w + 2), min(h_img, y + h + 2)
+                if tx2 > tx1 and ty2 > ty1 and bg_val >= 170:
+                    text_dark = (gray[ty1:ty2, tx1:tx2] < dark_thresh)
+                    clean_img[ty1:ty2, tx1:tx2][text_dark] = fill_color
+
                 continue
 
             # Mode 2 (Fallback): Stroke-level inpainting berbasis text_bbox
