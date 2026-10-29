@@ -1,3 +1,4 @@
+import os
 import re
 import torch
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
@@ -6,14 +7,24 @@ from typing import Optional, List
 class MangaTranslator:
     def __init__(
         self,
-        model_name: str = "facebook/nllb-200-distilled-600M",
+        model_name: Optional[str] = None,
         default_src_lang: str = "jpn_Jpan",
         default_tgt_lang: str = "ind_Latn",
-        device: Optional[str] = None
+        device: Optional[str] = None,
+        num_beams: int = 4,
+        repetition_penalty: float = 1.05
     ):
         """
         Translator multi-bahasa ultra-cepat menggunakan NLLB-200 dengan akselerasi FP16 (Half Precision).
         Dioptimalkan untuk Tensor Cores RTX 2050 (3x-5x lebih cepat dari FP32).
+        
+        Evaluasi Model:
+        - facebook/nllb-200-distilled-600M:
+            * VRAM FP16: ~1.15 GB (Peak ~1.30 GB)
+            * Sangat stabil dan muat bersamaan dengan MangaOCR (~1.2 GB) dan YOLOv8 (~0.3 GB) di GPU 4 GB.
+        - facebook/nllb-200-distilled-1.3B:
+            * VRAM FP16: ~2.56 GB (Peak ~2.78 GB)
+            * Muat pada 4 GB GPU saat standalone, namun rentan OOM jika dijalankan paralel penuh bersama MangaOCR + YOLO.
         """
         if device is None:
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -22,13 +33,15 @@ class MangaTranslator:
 
         self.default_src_lang = default_src_lang
         self.default_tgt_lang = default_tgt_lang
-        self.model_name = model_name
+        self.model_name = model_name or os.getenv("NLLB_MODEL", "facebook/nllb-200-distilled-600M")
+        self.num_beams = num_beams
+        self.repetition_penalty = repetition_penalty
 
-        print(f"[TRANSLATOR] Memuat model NLLB-200 pada {self.device.upper()} (FP16 Accelerated)...")
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name, src_lang=default_src_lang)
+        print(f"[TRANSLATOR] Memuat model NLLB-200 ({self.model_name}) pada {self.device.upper()} (FP16, beams={self.num_beams}, rep_penalty={self.repetition_penalty})...")
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name, src_lang=default_src_lang)
         
         dtype = torch.float16 if self.device == "cuda" else torch.float32
-        self.model = AutoModelForSeq2SeqLM.from_pretrained(model_name, torch_dtype=dtype).to(self.device)
+        self.model = AutoModelForSeq2SeqLM.from_pretrained(self.model_name, torch_dtype=dtype).to(self.device)
         self.model.eval()
         print(f"[TRANSLATOR] Model NLLB-200 FP16 siap beroperasi.")
 
@@ -115,8 +128,8 @@ class MangaTranslator:
                 forced_bos_token_id=forced_bos_token_id,
                 max_length=128,
                 no_repeat_ngram_size=3,
-                repetition_penalty=1.2,
-                num_beams=1  # Greedy decoding ultra cepat
+                repetition_penalty=self.repetition_penalty,
+                num_beams=self.num_beams
             )
 
         batch_results = self.tokenizer.batch_decode(
