@@ -8,7 +8,7 @@ import string
 import re
 import threading
 from typing import Dict, Any, List, Optional
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -492,6 +492,18 @@ class GlossaryAcceptItem(BaseModel):
 class GlossaryAcceptRequest(BaseModel):
     terms: List[GlossaryAcceptItem]
 
+def _validate_uuid_task_id(task_id: str) -> str:
+    """
+    Validasi parameter task_id untuk mencegah eksploitasi path traversal.
+    Mendukung format standard UUID (36 karakter) dan 8-karakter hex.
+    """
+    if not task_id:
+        raise HTTPException(status_code=400, detail="task_id tidak boleh kosong.")
+    clean = task_id.strip()
+    if not re.fullmatch(r'^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})?$', clean):
+        raise HTTPException(status_code=400, detail="Format task_id harus berupa UUID yang valid.")
+    return clean
+
 @app.post("/api/translate")
 async def start_translation(
     file: UploadFile = File(...),
@@ -505,13 +517,19 @@ async def start_translation(
     task_dir = os.path.join(TEMP_DIR, task_id)
     os.makedirs(task_dir, exist_ok=True)
 
-    uploaded_path = os.path.join(task_dir, file.filename)
+    # Sanitasi nama file upload untuk mencegah path traversal dan karakter berbahaya
+    raw_name = os.path.basename(file.filename or "uploaded_manga")
+    safe_filename = re.sub(r'[^a-zA-Z0-9._\-]', '_', raw_name)
+    if not safe_filename or safe_filename.startswith('.'):
+        safe_filename = f"manga_{safe_filename.lstrip('.')}"
+    uploaded_path = os.path.join(task_dir, safe_filename)
+
     with open(uploaded_path, "wb") as f:
         shutil.copyfileobj(file.file, f)
 
     TASKS[task_id] = {
         "task_id": task_id,
-        "filename": file.filename,
+        "filename": safe_filename,
         "series_id": series_id,
         "translation_backend": translation_backend,
         "is_completed": False,
@@ -529,7 +547,7 @@ async def start_translation(
     )
     thread.start()
 
-    return {"task_id": task_id, "filename": file.filename}
+    return {"task_id": task_id, "filename": safe_filename}
 
 @app.get("/api/glossary/{series_id}")
 async def get_series_glossary(series_id: str):
@@ -555,10 +573,13 @@ async def accept_candidates(series_id: str, req: GlossaryAcceptRequest):
     engine.glossary_mgr.save_glossary(series_id, glossary)
     return {"status": "ok", "series_id": series_id, "glossary": glossary}
 
+ALLOWED_LOCAL_HOSTS = {"127.0.0.1", "localhost", "127.0.0.1:7860", "localhost:7860"}
+
 @app.get("/api/glossary/{series_id}/discover/{task_id}")
 async def discover_candidates_from_task(series_id: str, task_id: str):
+    valid_task_id = _validate_uuid_task_id(task_id)
     engine = TranslationEngine.get_instance()
-    task_dir = os.path.join(TEMP_DIR, task_id, "debug")
+    task_dir = os.path.join(TEMP_DIR, valid_task_id, "debug")
     if not os.path.exists(task_dir):
         raise HTTPException(status_code=404, detail="Debug task belum tersedia.")
     files = sorted([f for f in os.listdir(task_dir) if f.endswith("_debug.json")])
@@ -578,17 +599,32 @@ async def discover_candidates_from_task(series_id: str, task_id: str):
 
 @app.post("/api/cancel/{task_id}")
 async def cancel_task(task_id: str):
-    if task_id not in TASKS:
+    valid_task_id = _validate_uuid_task_id(task_id)
+    if valid_task_id not in TASKS:
         raise HTTPException(status_code=404, detail="Task tidak ditemukan.")
-    TASKS[task_id]["is_cancelled"] = True
-    TASKS[task_id]["status_message"] = "Membatalkan proses..."
-    return {"status": "cancelling", "task_id": task_id}
+    TASKS[valid_task_id]["is_cancelled"] = True
+    TASKS[valid_task_id]["status_message"] = "Membatalkan proses..."
+    return {"status": "cancelling", "task_id": valid_task_id}
 
 @app.post("/api/shutdown")
-async def shutdown_server():
+async def shutdown_server(request: Request):
     """
     Mematikan server lokal, melepaskan seluruh VRAM GPU, dan menutup proses Python.
+    Hanya menerima permintaan dari Origin / Host lokal terpercaya untuk mencegah serangan CSRF.
     """
+    host = (request.headers.get("host") or "").lower()
+    origin = (request.headers.get("origin") or "").lower()
+    referer = (request.headers.get("referer") or "").lower()
+
+    if host and host not in ALLOWED_LOCAL_HOSTS:
+        raise HTTPException(status_code=403, detail="Akses ditolak: Host tidak valid")
+
+    if origin and not (origin.startswith("http://127.0.0.1") or origin.startswith("http://localhost")):
+        raise HTTPException(status_code=403, detail="Akses ditolak: Origin tidak diizinkan")
+
+    if referer and not (referer.startswith("http://127.0.0.1") or referer.startswith("http://localhost")):
+        raise HTTPException(status_code=403, detail="Akses ditolak: Referer tidak diizinkan")
+
     def delayed_exit():
         time.sleep(0.6)
         import torch
@@ -601,13 +637,15 @@ async def shutdown_server():
 
 @app.get("/api/progress/{task_id}")
 async def get_progress(task_id: str):
-    if task_id not in TASKS:
+    valid_task_id = _validate_uuid_task_id(task_id)
+    if valid_task_id not in TASKS:
         raise HTTPException(status_code=404, detail="Task tidak ditemukan.")
-    return TASKS[task_id]
+    return TASKS[valid_task_id]
 
 @app.get("/api/task/{task_id}/debug/{page_idx}")
 async def get_task_debug(task_id: str, page_idx: int):
-    task_dir = os.path.join(TEMP_DIR, task_id)
+    valid_task_id = _validate_uuid_task_id(task_id)
+    task_dir = os.path.join(TEMP_DIR, valid_task_id)
     debug_dir = os.path.join(task_dir, "debug")
     if not os.path.exists(debug_dir):
         raise HTTPException(status_code=404, detail="Debug data belum tersedia.")
