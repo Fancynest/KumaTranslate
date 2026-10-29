@@ -28,6 +28,8 @@ from src.translator import MangaTranslator
 from src.inpainter import MangaInpainter
 from src.renderer import MangaRenderer
 from src.document_processor import DocumentProcessor
+from src.glossary import GlossaryManager, NameCandidateExtractor, ChapterTranslationMemory
+from pydantic import BaseModel
 
 app = FastAPI(title="Manga Translator AI Local", version="2.6.0")
 
@@ -56,7 +58,9 @@ class TranslationEngine:
         self.renderer = MangaRenderer()
         self.ocr = MultiLingualOCR()
         self.translator = MangaTranslator()
-        print("[ENGINE] Seluruh model AI berhasil dimuat.")
+        self.glossary_mgr = GlossaryManager()
+        self.name_extractor = NameCandidateExtractor()
+        print("[ENGINE] Seluruh model AI & Glosarium berhasil dimuat.")
 
     def process_single_page(
         self,
@@ -65,7 +69,10 @@ class TranslationEngine:
         doc_lang_hint: Optional[str] = None,
         save_debug: bool = True,
         debug_dir: str = "debug_output",
-        translate_free_text: bool = False
+        translate_free_text: bool = False,
+        series_id: Optional[str] = None,
+        translation_memory: Optional[ChapterTranslationMemory] = None,
+        glossary: Optional[Dict[str, str]] = None
     ) -> Dict[str, Any]:
         """
         Memproses 1 halaman secara BATCH PARALEL Presisi Tinggi:
@@ -157,6 +164,14 @@ class TranslationEngine:
         # 3. BATCH TRANSLATE (Semua balon sekaligus dalam 1 panggilan GPU)
         res_id_texts = []
         res_en_texts = []
+        all_warnings = []
+
+        # Muat glosarium aktif untuk halaman ini
+        active_glossary = dict(glossary or {})
+        if series_id and not active_glossary:
+            active_glossary = self.glossary_mgr.load_glossary(series_id)
+        if translation_memory:
+            active_glossary.update(translation_memory.glossary)
 
         if target_lang in ["ind_Latn", "both"]:
             raw_id = self.translator.translate_batch(raw_texts, src_lang=page_lang, tgt_lang="ind_Latn")
@@ -168,7 +183,10 @@ class TranslationEngine:
                     print(f"[FILTER] Guard halusinasi membuang: '{src}' ({len(clean_src)}c) -> '{tgt}' ({len(words)}w)")
                     res_id_texts.append("")
                 else:
-                    res_id_texts.append(tgt)
+                    tgt_enforced, warns = self.glossary_mgr.post_check_and_enforce(src, tgt, active_glossary)
+                    if warns:
+                        all_warnings.extend(warns)
+                    res_id_texts.append(tgt_enforced)
 
         if target_lang in ["eng_Latn", "both"]:
             raw_en = self.translator.translate_batch(raw_texts, src_lang=page_lang, tgt_lang="eng_Latn")
@@ -179,7 +197,10 @@ class TranslationEngine:
                     print(f"[FILTER] Guard halusinasi membuang: '{src}' ({len(clean_src)}c) -> '{tgt}' ({len(words)}w)")
                     res_en_texts.append("")
                 else:
-                    res_en_texts.append(tgt)
+                    tgt_enforced, warns = self.glossary_mgr.post_check_and_enforce(src, tgt, active_glossary)
+                    if warns:
+                        all_warnings.extend(warns)
+                    res_en_texts.append(tgt_enforced)
 
         # 4. Inpainting: Hapus teks asli hanya pada balon yang memiliki terjemahan valid
         #    Jika terjemahan kosong / dibuang karena halusinasi, gambar asli dipertahankan tanpa ditimpa
@@ -216,7 +237,9 @@ class TranslationEngine:
         debug_dump = {
             "image": os.path.basename(img_path),
             "detected_lang": page_lang,
+            "series_id": series_id,
             "total_bubbles": len(valid_bubbles),
+            "glossary_warnings": all_warnings,
             "bubbles": []
         }
         for idx, b in enumerate(valid_bubbles):
@@ -274,7 +297,9 @@ def run_translation_task(
     task_id: str,
     uploaded_path: str,
     target_lang: str,
-    translate_free_text: bool = False
+    translate_free_text: bool = False,
+    series_id: Optional[str] = None,
+    auto_accept_glossary: bool = False
 ):
     task = TASKS[task_id]
     t0 = time.time()
@@ -299,6 +324,10 @@ def run_translation_task(
         orig_web_paths = []
         trans_web_paths = []
 
+        # Translation memory & Glosarium per seri
+        series_glossary = engine.glossary_mgr.load_glossary(series_id) if series_id else {}
+        trans_memory = ChapterTranslationMemory(initial_glossary=series_glossary)
+
         # Lock bahasa dokumen (diambil dari halaman pertama agar konsisten & cepat)
         document_language_lock = None
 
@@ -322,7 +351,9 @@ def run_translation_task(
                 doc_lang_hint=document_language_lock,
                 save_debug=True,
                 debug_dir=os.path.join(task_dir, "debug"),
-                translate_free_text=translate_free_text
+                translate_free_text=translate_free_text,
+                series_id=series_id,
+                translation_memory=trans_memory
             )
 
             # Kunci bahasa dokumen dari deteksi pertama
@@ -402,11 +433,23 @@ def run_translation_task(
         task["is_error"] = True
         task["error_message"] = str(e)
 
+class GlossaryUpdateRequest(BaseModel):
+    glossary: Dict[str, str]
+
+class GlossaryAcceptItem(BaseModel):
+    term: str
+    translation: str
+
+class GlossaryAcceptRequest(BaseModel):
+    terms: List[GlossaryAcceptItem]
+
 @app.post("/api/translate")
 async def start_translation(
     file: UploadFile = File(...),
     target_lang: str = Form("ind_Latn"),
-    translate_free_text: bool = Form(False)
+    translate_free_text: bool = Form(False),
+    series_id: Optional[str] = Form(None),
+    auto_accept_glossary: bool = Form(False)
 ):
     task_id = str(uuid.uuid4())[:8]
     task_dir = os.path.join(TEMP_DIR, task_id)
@@ -419,6 +462,7 @@ async def start_translation(
     TASKS[task_id] = {
         "task_id": task_id,
         "filename": file.filename,
+        "series_id": series_id,
         "is_completed": False,
         "is_cancelled": False,
         "is_error": False,
@@ -429,12 +473,57 @@ async def start_translation(
 
     thread = threading.Thread(
         target=run_translation_task,
-        args=(task_id, uploaded_path, target_lang, translate_free_text),
+        args=(task_id, uploaded_path, target_lang, translate_free_text, series_id, auto_accept_glossary),
         daemon=True
     )
     thread.start()
 
     return {"task_id": task_id, "filename": file.filename}
+
+@app.get("/api/glossary/{series_id}")
+async def get_series_glossary(series_id: str):
+    engine = TranslationEngine.get_instance()
+    glossary = engine.glossary_mgr.load_glossary(series_id)
+    return {"series_id": series_id, "glossary": glossary}
+
+@app.post("/api/glossary/{series_id}")
+async def update_series_glossary(series_id: str, req: GlossaryUpdateRequest):
+    engine = TranslationEngine.get_instance()
+    saved_path = engine.glossary_mgr.save_glossary(series_id, req.glossary)
+    return {"status": "ok", "series_id": series_id, "glossary": req.glossary, "path": saved_path}
+
+@app.post("/api/glossary/{series_id}/accept")
+async def accept_candidates(series_id: str, req: GlossaryAcceptRequest):
+    engine = TranslationEngine.get_instance()
+    glossary = engine.glossary_mgr.load_glossary(series_id)
+    for item in req.terms:
+        term = item.term.strip()
+        trans = item.translation.strip()
+        if term and trans:
+            glossary[term] = trans
+    engine.glossary_mgr.save_glossary(series_id, glossary)
+    return {"status": "ok", "series_id": series_id, "glossary": glossary}
+
+@app.get("/api/glossary/{series_id}/discover/{task_id}")
+async def discover_candidates_from_task(series_id: str, task_id: str):
+    engine = TranslationEngine.get_instance()
+    task_dir = os.path.join(TEMP_DIR, task_id, "debug")
+    if not os.path.exists(task_dir):
+        raise HTTPException(status_code=404, detail="Debug task belum tersedia.")
+    files = sorted([f for f in os.listdir(task_dir) if f.endswith("_debug.json")])
+    chapter_texts = []
+    for f in files:
+        with open(os.path.join(task_dir, f), "r", encoding="utf-8") as jf:
+            data = json.load(jf)
+            page_lines = [b.get("ocr_text", "") for b in data.get("bubbles", []) if b.get("ocr_text")]
+            chapter_texts.append(page_lines)
+
+    candidates = engine.name_extractor.extract_candidates(chapter_texts)
+    return {
+        "series_id": series_id,
+        "total_candidates": len(candidates),
+        "candidates": candidates
+    }
 
 @app.post("/api/cancel/{task_id}")
 async def cancel_task(task_id: str):

@@ -16,6 +16,8 @@ output/
 input/
 debug_output/
 evaluation/debug_overlays/
+glossary/*.json
+scratch/
 
 # IDE / OS files
 .vscode/

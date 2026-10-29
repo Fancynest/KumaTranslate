@@ -109,6 +109,26 @@
               </div>
             </label>
           </div>
+
+          <!-- Series & Glossary (Step 3) -->
+          <div class="space-y-2 pt-2 border-t border-zinc-800/80">
+            <div class="flex items-center justify-between">
+              <label class="text-xs font-medium text-zinc-400">ID / Seri (Glosarium)</label>
+              <button id="btn-open-glossary" type="button" class="text-[11px] text-zinc-400 hover:text-zinc-200 underline">Glosarium Seri</button>
+            </div>
+            <input type="text" id="series-id-input" placeholder="Opsional (cth: wikipe)" class="w-full px-3 py-1.5 rounded-lg bg-zinc-950 border border-zinc-800 text-xs text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-zinc-500">
+          </div>
+
+          <div class="space-y-1.5">
+            <label class="flex items-center space-x-2 text-[11px] text-zinc-400 cursor-pointer">
+              <input type="checkbox" id="auto-accept-glossary" class="rounded border-zinc-800 bg-zinc-950 text-zinc-200 focus:ring-0">
+              <span>Auto-accept nama diri skor tinggi (&ge; 5.5)</span>
+            </label>
+            <label class="flex items-center space-x-2 text-[11px] text-zinc-400 cursor-pointer">
+              <input type="checkbox" id="translate-free-text" class="rounded border-zinc-800 bg-zinc-950 text-zinc-200 focus:ring-0">
+              <span>Terjemahkan teks bebas / SFX</span>
+            </label>
+          </div>
         </div>
 
         <button id="btn-translate" disabled class="w-full py-2.5 px-4 rounded-lg bg-zinc-100 hover:bg-white text-zinc-950 font-medium text-sm disabled:opacity-40 disabled:cursor-not-allowed transition-all">
@@ -180,6 +200,57 @@
               <img id="img-translated" src="" alt="Terjemahan" class="max-w-full max-h-[650px] object-contain rounded">
             </div>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Glossary Modal (Step 3) -->
+    <div id="glossary-modal" class="hidden fixed inset-0 z-50 bg-zinc-950/90 backdrop-blur-sm flex items-center justify-center p-4">
+      <div class="max-w-2xl w-full border border-zinc-800 rounded-xl bg-zinc-900 p-6 space-y-4 shadow-2xl max-h-[85vh] flex flex-col">
+        <div class="flex items-center justify-between border-b border-zinc-800 pb-3">
+          <div class="flex items-center space-x-2">
+            <i data-lucide="book-marked" class="w-4 h-4 text-zinc-300"></i>
+            <h3 class="text-sm font-semibold text-zinc-100">Glosarium Seri: <span id="modal-series-name" class="font-mono text-zinc-400">default</span></h3>
+          </div>
+          <button id="btn-close-glossary" type="button" class="text-zinc-400 hover:text-zinc-200">
+            <i data-lucide="x" class="w-4 h-4"></i>
+          </button>
+        </div>
+
+        <!-- Add entry row -->
+        <div class="grid grid-cols-1 sm:grid-cols-5 gap-2">
+          <input type="text" id="new-term-src" placeholder="Istilah Sumber (Jp/Ko/Zh)" class="sm:col-span-2 px-3 py-1.5 rounded-lg bg-zinc-950 border border-zinc-800 text-xs text-zinc-200 focus:outline-none focus:border-zinc-500">
+          <input type="text" id="new-term-tgt" placeholder="Terjemahan Target" class="sm:col-span-2 px-3 py-1.5 rounded-lg bg-zinc-950 border border-zinc-800 text-xs text-zinc-200 focus:outline-none focus:border-zinc-500">
+          <button id="btn-add-glossary-term" type="button" class="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs font-medium text-zinc-200 flex items-center justify-center space-x-1">
+            <i data-lucide="plus" class="w-3.5 h-3.5"></i> <span>Tambah</span>
+          </button>
+        </div>
+
+        <!-- Current terms table -->
+        <div class="flex-1 overflow-y-auto space-y-2 border border-zinc-800 rounded-lg p-3 bg-zinc-950/60 max-h-48">
+          <div class="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mb-2">Daftar Istilah Glosarium</div>
+          <div id="glossary-list" class="space-y-1.5 text-xs text-zinc-300">
+            <div class="text-zinc-500 text-center py-3">Belum ada entri glosarium.</div>
+          </div>
+        </div>
+
+        <!-- Discovered candidates section -->
+        <div class="space-y-2 border-t border-zinc-800 pt-3">
+          <div class="flex items-center justify-between">
+            <div class="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">Kandidat Nama Diri Terdeteksi</div>
+            <button id="btn-discover-candidates" type="button" class="text-xs text-zinc-400 hover:text-zinc-200 underline">
+              Pindai dari Hasil Tugas Terakhir
+            </button>
+          </div>
+          <div id="candidates-list" class="space-y-1.5 text-xs max-h-36 overflow-y-auto">
+            <div class="text-zinc-500 text-center py-2 text-[11px]">Jalankan terjemahan satu chapter untuk memindai kandidat nama diri secara otomatis.</div>
+          </div>
+        </div>
+
+        <div class="flex justify-end space-x-2 pt-2 border-t border-zinc-800">
+          <button id="btn-save-glossary" type="button" class="px-4 py-2 rounded-lg bg-zinc-100 hover:bg-white text-zinc-950 text-xs font-medium">
+            Simpan Glosarium
+          </button>
         </div>
       </div>
     </div>
@@ -316,9 +387,16 @@
       if (!selectedFile) return;
 
       const targetLang = document.querySelector('input[name="target_lang"]:checked').value;
+      const seriesId = document.getElementById('series-id-input').value.trim();
+      const autoAccept = document.getElementById('auto-accept-glossary').checked;
+      const translateFreeText = document.getElementById('translate-free-text').checked;
+
       const formData = new FormData();
       formData.append('file', selectedFile);
       formData.append('target_lang', targetLang);
+      if (seriesId) formData.append('series_id', seriesId);
+      formData.append('auto_accept_glossary', autoAccept);
+      formData.append('translate_free_text', translateFreeText);
 
       btnTranslate.disabled = true;
       btnCancel.disabled = false;
@@ -437,6 +515,153 @@
       if (currentPageIndex < originalPages.length - 1) {
         currentPageIndex++;
         updatePageViewer();
+      }
+    });
+
+    // Glossary Modal Logic (Step 3)
+    const btnOpenGlossary = document.getElementById('btn-open-glossary');
+    const btnCloseGlossary = document.getElementById('btn-close-glossary');
+    const glossaryModal = document.getElementById('glossary-modal');
+    const modalSeriesName = document.getElementById('modal-series-name');
+    const seriesIdInput = document.getElementById('series-id-input');
+    const glossaryList = document.getElementById('glossary-list');
+    const candidatesList = document.getElementById('candidates-list');
+    const btnAddGlossaryTerm = document.getElementById('btn-add-glossary-term');
+    const btnSaveGlossary = document.getElementById('btn-save-glossary');
+    const btnDiscoverCandidates = document.getElementById('btn-discover-candidates');
+    const newTermSrc = document.getElementById('new-term-src');
+    const newTermTgt = document.getElementById('new-term-tgt');
+
+    let currentGlossary = {};
+
+    function getActiveSeries() {
+      const s = seriesIdInput.value.trim();
+      return s ? s : 'default';
+    }
+
+    btnOpenGlossary.addEventListener('click', async () => {
+      const series = getActiveSeries();
+      modalSeriesName.textContent = series;
+      glossaryModal.classList.remove('hidden');
+      await loadGlossary(series);
+      lucide.createIcons();
+    });
+
+    btnCloseGlossary.addEventListener('click', () => {
+      glossaryModal.classList.add('hidden');
+    });
+
+    async function loadGlossary(series) {
+      try {
+        const res = await fetch(`/api/glossary/${series}`);
+        const data = await res.json();
+        currentGlossary = data.glossary || {};
+        renderGlossary();
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    function renderGlossary() {
+      const entries = Object.entries(currentGlossary);
+      if (entries.length === 0) {
+        glossaryList.innerHTML = '<div class="text-zinc-500 text-center py-3">Belum ada entri glosarium.</div>';
+        return;
+      }
+      glossaryList.innerHTML = '';
+      entries.forEach(([src, tgt]) => {
+        const row = document.createElement('div');
+        row.className = 'flex items-center justify-between py-1 px-2 rounded bg-zinc-900 border border-zinc-800/80';
+        row.innerHTML = `
+          <div class="flex items-center space-x-2">
+            <span class="font-medium text-zinc-100">${src}</span>
+            <span class="text-zinc-500">&rarr;</span>
+            <span class="text-zinc-300">${tgt}</span>
+          </div>
+          <button type="button" class="text-red-400 hover:text-red-300 text-xs px-1.5 py-0.5 rounded delete-term" data-term="${src}">&times;</button>
+        `;
+        glossaryList.appendChild(row);
+      });
+
+      glossaryList.querySelectorAll('.delete-term').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const t = btn.getAttribute('data-term');
+          delete currentGlossary[t];
+          renderGlossary();
+        });
+      });
+    }
+
+    btnAddGlossaryTerm.addEventListener('click', () => {
+      const s = newTermSrc.value.trim();
+      const t = newTermTgt.value.trim();
+      if (!s || !t) return;
+      currentGlossary[s] = t;
+      newTermSrc.value = '';
+      newTermTgt.value = '';
+      renderGlossary();
+    });
+
+    btnSaveGlossary.addEventListener('click', async () => {
+      const series = getActiveSeries();
+      try {
+        const res = await fetch(`/api/glossary/${series}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ glossary: currentGlossary })
+        });
+        if (res.ok) {
+          alert(`Glosarium seri '${series}' berhasil disimpan!`);
+        }
+      } catch (e) {
+        alert('Gagal menyimpan glosarium: ' + e.message);
+      }
+    });
+
+    btnDiscoverCandidates.addEventListener('click', async () => {
+      if (!currentTaskId) {
+        alert('Belum ada tugas terjemahan yang dijalankan di sesi ini untuk memindai kandidat.');
+        return;
+      }
+      const series = getActiveSeries();
+      candidatesList.innerHTML = '<div class="text-zinc-400 text-center py-2 text-[11px]">Memindai kandidat dari task...</div>';
+      try {
+        const res = await fetch(`/api/glossary/${series}/discover/${currentTaskId}`);
+        if (!res.ok) throw new Error('Data debug task tidak ditemukan');
+        const data = await res.json();
+        const cand = data.candidates || [];
+        if (cand.length === 0) {
+          candidatesList.innerHTML = '<div class="text-zinc-500 text-center py-2 text-[11px]">Tidak ditemukan kandidat nama diri baru dengan skor mencukupi.</div>';
+          return;
+        }
+        candidatesList.innerHTML = '';
+        cand.forEach(c => {
+          const div = document.createElement('div');
+          div.className = 'flex items-center justify-between py-1 px-2 rounded bg-zinc-900 border border-zinc-800 text-[11px]';
+          div.innerHTML = `
+            <div>
+              <span class="font-semibold text-zinc-100">${c.term}</span>
+              <span class="text-zinc-500 text-[10px] ml-1.5">(Skor: ${c.score}, ${c.reasons.join(', ')})</span>
+            </div>
+            <button type="button" class="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 accept-cand" data-term="${c.term}" data-trans="${c.suggested_translation}">
+              + Glosarium
+            </button>
+          `;
+          candidatesList.appendChild(div);
+        });
+
+        candidatesList.querySelectorAll('.accept-cand').forEach(b => {
+          b.addEventListener('click', () => {
+            const term = b.getAttribute('data-term');
+            const trans = prompt(`Masukkan terjemahan target untuk nama '${term}':`, term);
+            if (trans) {
+              currentGlossary[term] = trans;
+              renderGlossary();
+            }
+          });
+        });
+      } catch (e) {
+        candidatesList.innerHTML = `<div class="text-red-400 text-center py-2 text-[11px]">${e.message}</div>`;
       }
     });
   </script>
