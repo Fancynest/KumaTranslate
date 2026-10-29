@@ -122,6 +122,17 @@ class MangaRenderer:
             sample_bbox = draw.textbbox((0, 0), "Ag", font=font)
             line_h = sample_bbox[3] - sample_bbox[1]
 
+            # Aturan: jika ada token tunggal yang lebarnya > rect_w,
+            # perkecil font (shrink font if single token > line width)
+            token_overflow = False
+            for w in words:
+                w_bb = draw.textbbox((0, 0), w, font=font)
+                if (w_bb[2] - w_bb[0]) > rect_w:
+                    token_overflow = True
+                    break
+            if token_overflow:
+                continue
+
             # 1. Word wrap awal berdasarkan lebar nominal safe area
             lines = []
             cur_line = []
@@ -168,15 +179,38 @@ class MangaRenderer:
             if all_lines_fit:
                 return font, lines, line_positions, spacing
 
-        # Fallback pada ukuran font minimum yang tetap terbaca jelas (>= 11-12px)
+        # Fallback pada ukuran font minimum: jika token melebihi lebar, pecah per karakter (character break)
         font = ImageFont.truetype(self.font_path, min_font)
         spacing = 1
         sample_bbox = draw.textbbox((0, 0), "Ag", font=font)
         line_h = sample_bbox[3] - sample_bbox[1]
 
+        # Pecah token per karakter jika masih melebihi rect_w pada min_font
+        broken_words = []
+        for w in words:
+            w_bb = draw.textbbox((0, 0), w, font=font)
+            if (w_bb[2] - w_bb[0]) > rect_w:
+                cur_chunk = ""
+                for ch in w:
+                    cand_chunk = cur_chunk + ch
+                    c_bb = draw.textbbox((0, 0), cand_chunk, font=font)
+                    if (c_bb[2] - c_bb[0]) <= rect_w:
+                        cur_chunk = cand_chunk
+                    else:
+                        if cur_chunk:
+                            broken_words.append(cur_chunk)
+                            cur_chunk = ch
+                        else:
+                            broken_words.append(ch)
+                            cur_chunk = ""
+                if cur_chunk:
+                    broken_words.append(cur_chunk)
+            else:
+                broken_words.append(w)
+
         lines = []
         cur_line = []
-        for w in words:
+        for w in broken_words:
             cand = " ".join(cur_line + [w])
             w_bb = draw.textbbox((0, 0), cand, font=font)
             if (w_bb[2] - w_bb[0]) <= rect_w:
@@ -199,7 +233,13 @@ class MangaRenderer:
             lw = l_bb[2] - l_bb[0]
             y_top = start_y + idx * (line_h + spacing)
             avail_w, cx = get_line_span(y_top, y_top + line_h)
-            lx = cx - (lw // 2) if lw <= avail_w else bx + max(0, (bw - lw) // 2)
+            
+            if lw <= avail_w:
+                lx = cx - (lw // 2)
+            else:
+                lx = bx + max(0, (bw - lw) // 2)
+            # Pastikan teks strictly berada di dalam batas horizontal
+            lx = max(bx, min(bx + bw - lw, lx))
             line_positions.append((lx, y_top))
 
         return font, lines, line_positions, spacing
