@@ -72,7 +72,8 @@ class TranslationEngine:
         translate_free_text: bool = False,
         series_id: Optional[str] = None,
         translation_memory: Optional[ChapterTranslationMemory] = None,
-        glossary: Optional[Dict[str, str]] = None
+        glossary: Optional[Dict[str, str]] = None,
+        translation_backend: str = "auto"
     ) -> Dict[str, Any]:
         """
         Memproses 1 halaman secara BATCH PARALEL Presisi Tinggi:
@@ -161,10 +162,11 @@ class TranslationEngine:
         else:
             page_lang = detect_document_language(raw_texts)
 
-        # 3. BATCH TRANSLATE (Semua balon sekaligus dalam 1 panggilan GPU)
+        # 3. BATCH TRANSLATE (Semua balon sekaligus dalam 1 urutan baca & GPU)
         res_id_texts = []
         res_en_texts = []
         all_warnings = []
+        used_backends = {}
 
         # Muat glosarium aktif untuk halaman ini
         active_glossary = dict(glossary or {})
@@ -174,7 +176,16 @@ class TranslationEngine:
             active_glossary.update(translation_memory.glossary)
 
         if target_lang in ["ind_Latn", "both"]:
-            raw_id = self.translator.translate_batch(raw_texts, src_lang=page_lang, tgt_lang="ind_Latn")
+            raw_id, backend_id = self.translator.translate_page_bubbles(
+                texts=raw_texts,
+                backend=translation_backend,
+                src_lang=page_lang,
+                tgt_lang="ind_Latn",
+                series_hint=series_id,
+                glossary=active_glossary
+            )
+            used_backends["ind_Latn"] = backend_id
+
             # Guard halusinasi: jika sumber <= 3 karakter dan keluaran >= 3 kata, buang
             for src, tgt in zip(raw_texts, raw_id):
                 clean_src = PUNCT_REGEX.sub("", src)
@@ -189,7 +200,16 @@ class TranslationEngine:
                     res_id_texts.append(tgt_enforced)
 
         if target_lang in ["eng_Latn", "both"]:
-            raw_en = self.translator.translate_batch(raw_texts, src_lang=page_lang, tgt_lang="eng_Latn")
+            raw_en, backend_en = self.translator.translate_page_bubbles(
+                texts=raw_texts,
+                backend="nllb" if translation_backend == "nllb" else "auto",
+                src_lang=page_lang,
+                tgt_lang="eng_Latn",
+                series_hint=series_id,
+                glossary=active_glossary
+            )
+            used_backends["eng_Latn"] = backend_en
+
             for src, tgt in zip(raw_texts, raw_en):
                 clean_src = PUNCT_REGEX.sub("", src)
                 words = [w for w in tgt.strip().split() if w]
@@ -238,6 +258,7 @@ class TranslationEngine:
             "image": os.path.basename(img_path),
             "detected_lang": page_lang,
             "series_id": series_id,
+            "translation_backend": used_backends,
             "total_bubbles": len(valid_bubbles),
             "glossary_warnings": all_warnings,
             "bubbles": []
@@ -299,7 +320,8 @@ def run_translation_task(
     target_lang: str,
     translate_free_text: bool = False,
     series_id: Optional[str] = None,
-    auto_accept_glossary: bool = False
+    auto_accept_glossary: bool = False,
+    translation_backend: str = "auto"
 ):
     task = TASKS[task_id]
     t0 = time.time()
@@ -353,7 +375,8 @@ def run_translation_task(
                 debug_dir=os.path.join(task_dir, "debug"),
                 translate_free_text=translate_free_text,
                 series_id=series_id,
-                translation_memory=trans_memory
+                translation_memory=trans_memory,
+                translation_backend=translation_backend
             )
 
             # Kunci bahasa dokumen dari deteksi pertama
@@ -449,7 +472,8 @@ async def start_translation(
     target_lang: str = Form("ind_Latn"),
     translate_free_text: bool = Form(False),
     series_id: Optional[str] = Form(None),
-    auto_accept_glossary: bool = Form(False)
+    auto_accept_glossary: bool = Form(False),
+    translation_backend: str = Form("auto")
 ):
     task_id = str(uuid.uuid4())[:8]
     task_dir = os.path.join(TEMP_DIR, task_id)
@@ -463,6 +487,7 @@ async def start_translation(
         "task_id": task_id,
         "filename": file.filename,
         "series_id": series_id,
+        "translation_backend": translation_backend,
         "is_completed": False,
         "is_cancelled": False,
         "is_error": False,
@@ -473,7 +498,7 @@ async def start_translation(
 
     thread = threading.Thread(
         target=run_translation_task,
-        args=(task_id, uploaded_path, target_lang, translate_free_text, series_id, auto_accept_glossary),
+        args=(task_id, uploaded_path, target_lang, translate_free_text, series_id, auto_accept_glossary, translation_backend),
         daemon=True
     )
     thread.start()

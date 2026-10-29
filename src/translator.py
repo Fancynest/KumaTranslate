@@ -1,8 +1,96 @@
 import os
 import re
+import json
+import logging
+import requests
 import torch
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
-from typing import Optional, List
+from typing import Optional, List, Dict, Any, Tuple
+
+logger = logging.getLogger("KumaTranslate.Translator")
+
+class LLMTranslator:
+    """
+    Backend terjemahan berbasis LLM (Ollama lokal atau OpenAI-compatible API).
+    Menerjemahkan seluruh balon dalam 1 halaman sekaligus dalam reading order,
+    dengan output JSON per nomor balon kata: {"1": "...", "2": "..."}.
+    """
+    def __init__(
+        self,
+        api_base: Optional[str] = None,
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        timeout: int = 20
+    ):
+        self.api_base = api_base or os.getenv("LLM_API_BASE", "http://localhost:11434/v1")
+        self.model = model or os.getenv("LLM_MODEL", "qwen2.5:7b")
+        self.api_key = api_key or os.getenv("LLM_API_KEY", "")
+        self.timeout = timeout
+
+    def translate_bubbles(
+        self,
+        texts: List[str],
+        src_lang: str = "jpn_Jpan",
+        tgt_lang: str = "ind_Latn",
+        series_hint: Optional[str] = None,
+        glossary: Optional[Dict[str, str]] = None
+    ) -> List[str]:
+        if not texts:
+            return []
+
+        prompt_lines = [f"{i+1}: {t}" for i, t in enumerate(texts)]
+        system_prompt = (
+            "You are an expert manga/comic localizer translating dialogue into natural, casual Indonesian.\n"
+            "Style Guide:\n"
+            "1. Casual and natural Indonesian (Bahasa Indonesia santai, luwes, dan tidak kaku).\n"
+            "2. Keep sentences concise and punchy so they strictly fit inside comic speech bubbles.\n"
+            "3. Consistent pronoun styles and character address throughout the scene.\n"
+            "4. NEVER translate proper character names or series titles. Strictly follow the glossary if provided.\n"
+            "5. NEVER translate SFX (sound effects).\n"
+            "6. Output format: strictly a single JSON object mapping each number (string) to its translation string. "
+            "Example: {\"1\": \"...\", \"2\": \"...\"}. Do not write explanations or markdown outside the JSON."
+        )
+
+        user_content = f"Series Title Hint: {series_hint or 'None'}\n"
+        if glossary:
+            user_content += f"Glossary (Source -> Target): {json.dumps(glossary, ensure_ascii=False)}\n"
+        user_content += "\nSpeech bubbles in reading order:\n" + "\n".join(prompt_lines)
+        user_content += '\n\nTranslate each numbered bubble into natural Indonesian. Return strictly a JSON object {"1": "...", "2": "..."}.'
+
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content}
+            ],
+            "temperature": 0.3,
+            "response_format": {"type": "json_object"}
+        }
+
+        url = f"{self.api_base}/chat/completions"
+        resp = requests.post(url, json=payload, headers=headers, timeout=self.timeout)
+        resp.raise_for_status()
+        data = resp.json()
+        content = data["choices"][0]["message"]["content"].strip()
+
+        # Robust JSON extraction
+        if "```" in content:
+            content = re.sub(r'```(?:json)?', '', content).strip()
+        match = re.search(r'\{.*\}', content, re.DOTALL)
+        if not match:
+            raise ValueError(f"Tidak dapat menemukan JSON pada respons LLM: {content[:100]}...")
+
+        parsed = json.loads(match.group(0))
+        results = []
+        for i in range(len(texts)):
+            key = str(i + 1)
+            results.append(parsed.get(key, "").strip())
+
+        return results
 
 class MangaTranslator:
     def __init__(
@@ -43,7 +131,8 @@ class MangaTranslator:
         dtype = torch.float16 if self.device == "cuda" else torch.float32
         self.model = AutoModelForSeq2SeqLM.from_pretrained(self.model_name, torch_dtype=dtype).to(self.device)
         self.model.eval()
-        print(f"[TRANSLATOR] Model NLLB-200 FP16 siap beroperasi.")
+        self.llm = LLMTranslator()
+        print(f"[TRANSLATOR] Model NLLB-200 FP16 & LLM Backend siap beroperasi.")
 
     def _clean_translated_text(self, text: str) -> str:
         """
@@ -142,6 +231,49 @@ class MangaTranslator:
             final_results[idx] = self._clean_translated_text(res_text)
 
         return final_results
+
+    def translate_page_bubbles(
+        self,
+        texts: List[str],
+        backend: str = "auto",
+        src_lang: Optional[str] = None,
+        tgt_lang: Optional[str] = None,
+        series_hint: Optional[str] = None,
+        glossary: Optional[Dict[str, str]] = None
+    ) -> Tuple[List[str], str]:
+        """
+        Menerjemahkan seluruh balon dalam satu halaman komik.
+        Mendukung backend 'llm' (Ollama/API) dengan reading order dan output JSON terstruktur,
+        serta otomatis fallback ke NLLB-200 jika LLM gagal atau offline.
+        
+        Mengembalikan (daftar_terjemahan, backend_yang_digunakan).
+        """
+        if not texts:
+            return [], backend
+
+        chosen_backend = backend.lower() if backend else "auto"
+
+        if chosen_backend in ["llm", "auto"]:
+            try:
+                # LLM saat ini terutama optimal untuk output target Bahasa Indonesia
+                if (tgt_lang or self.default_tgt_lang) == "ind_Latn":
+                    results = self.llm.translate_bubbles(
+                        texts=texts,
+                        src_lang=src_lang or self.default_src_lang,
+                        tgt_lang=tgt_lang or self.default_tgt_lang,
+                        series_hint=series_hint,
+                        glossary=glossary
+                    )
+                    if results and len(results) == len(texts) and any(r.strip() for r in results):
+                        return results, "llm"
+            except Exception as e:
+                warn_msg = f"[LLM FALLBACK] Backend LLM gagal ({type(e).__name__}: {e}). Beralih otomatis ke NLLB-200 offline."
+                print(warn_msg)
+                logger.warning(warn_msg)
+
+        # Fallback ke NLLB-200 batch translator
+        nllb_results = self.translate_batch(texts, src_lang=src_lang, tgt_lang=tgt_lang)
+        return nllb_results, "nllb"
 
     def translate(self, text: str, src_lang: Optional[str] = None, tgt_lang: Optional[str] = None) -> str:
         if not text or not text.strip():
