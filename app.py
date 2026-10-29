@@ -2,6 +2,7 @@ import os
 import sys
 import uuid
 import time
+import json
 import shutil
 import threading
 from typing import Dict, Any, List, Optional
@@ -57,7 +58,9 @@ class TranslationEngine:
         self,
         img_path: str,
         target_lang: str = "ind_Latn",
-        doc_lang_hint: Optional[str] = None
+        doc_lang_hint: Optional[str] = None,
+        save_debug: bool = True,
+        debug_dir: str = "debug_output"
     ) -> Dict[str, Any]:
         """
         Memproses 1 halaman secara BATCH PARALEL Presisi Tinggi:
@@ -66,6 +69,7 @@ class TranslationEngine:
         - Batch translation ke GPU NLLB-200 FP16
         - Stroke-level inpainting (0% merusak gambar karakter)
         - Strict Fitting Typesetting (100% DIJAMIN teks TIDAK KELUAR dari balon kata)
+        - Debug dump JSON per halaman untuk pemisahan diagnosis OCR vs Terjemahan
         """
         img = Image.open(img_path).convert("RGB")
         w_orig, h_orig = img.size
@@ -81,9 +85,22 @@ class TranslationEngine:
         bubbles = self.detector.detect(img)
 
         if not bubbles:
+            empty_dump = {
+                "image": os.path.basename(img_path),
+                "detected_lang": doc_lang_hint or "jpn_Jpan",
+                "total_bubbles": 0,
+                "bubbles": []
+            }
+            if save_debug:
+                os.makedirs(debug_dir, exist_ok=True)
+                stem = os.path.splitext(os.path.basename(img_path))[0]
+                with open(os.path.join(debug_dir, f"{stem}_debug.json"), "w", encoding="utf-8") as f:
+                    json.dump(empty_dump, f, indent=2, ensure_ascii=False)
+
             return {
                 "detected_lang": doc_lang_hint or "jpn_Jpan",
-                "images": {"ind_Latn": img, "eng_Latn": img}
+                "images": {"ind_Latn": img, "eng_Latn": img},
+                "debug_dump": empty_dump
             }
 
         # 1. OCR teks dari tiap balon kata
@@ -101,9 +118,22 @@ class TranslationEngine:
                 valid_bubbles.append(b)
 
         if not raw_texts:
+            empty_dump = {
+                "image": os.path.basename(img_path),
+                "detected_lang": doc_lang_hint or "jpn_Jpan",
+                "total_bubbles": 0,
+                "bubbles": []
+            }
+            if save_debug:
+                os.makedirs(debug_dir, exist_ok=True)
+                stem = os.path.splitext(os.path.basename(img_path))[0]
+                with open(os.path.join(debug_dir, f"{stem}_debug.json"), "w", encoding="utf-8") as f:
+                    json.dump(empty_dump, f, indent=2, ensure_ascii=False)
+
             return {
                 "detected_lang": doc_lang_hint or "jpn_Jpan",
-                "images": {"ind_Latn": img, "eng_Latn": img}
+                "images": {"ind_Latn": img, "eng_Latn": img},
+                "debug_dump": empty_dump
             }
 
         # 2. Tentukan bahasa dokumen secara holistik
@@ -123,15 +153,11 @@ class TranslationEngine:
             res_en_texts = self.translator.translate_batch(raw_texts, src_lang=page_lang, tgt_lang="eng_Latn")
 
         # 4. Inpainting: Hapus teks asli dengan presisi goresan tinta (text_bbox)
-        #    Menggunakan text_bbox memastikan inpainting hanya menyentuh goresan huruf asli,
-        #    dan connected-components filter menjamin border panel dan rambut karakter tidak pernah terhapus.
         text_bboxes = [b["text_bbox"] for b in valid_bubbles]
         bubble_masks = [b.get("bubble_mask") for b in valid_bubbles]
         cleaned_img = self.inpainter.clean_bubbles(img, text_bboxes, masks=bubble_masks)
 
         # 5. Typesetting: Render teks terjemahan ke dalam safe_bbox (rongga dalam balon kata)
-        #    Teks terjemahan horizontal (Indonesia / Inggris) membutuhkan ruang lebar balon kata.
-        #    Renderer strict fitting menjamin teks 100% terkunci rapi di dalam rongga tanpa meluber keluar.
         output_images = {}
         if target_lang in ["ind_Latn", "both"]:
             img_id = cleaned_img.copy()
@@ -147,9 +173,40 @@ class TranslationEngine:
                 img_en = self.renderer.render_bubble_text(img_en, render_box, t)
             output_images["eng_Latn"] = img_en
 
+        # 6. Susun Debug Dump JSON (bubble_id, bbox, text_bbox, type, source, ocr_text, translation)
+        debug_dump = {
+            "image": os.path.basename(img_path),
+            "detected_lang": page_lang,
+            "total_bubbles": len(valid_bubbles),
+            "bubbles": []
+        }
+        for idx, b in enumerate(valid_bubbles):
+            t_id = res_id_texts[idx] if idx < len(res_id_texts) else ""
+            t_en = res_en_texts[idx] if idx < len(res_en_texts) else ""
+            debug_dump["bubbles"].append({
+                "bubble_id": idx + 1,
+                "bbox": list(b.get("safe_bbox", b.get("bubble_bbox", b.get("bbox")))),
+                "text_bbox": list(b.get("text_bbox", b.get("bbox"))),
+                "type": b.get("type", "text_bubble"),
+                "source": b.get("source", "heuristic"),
+                "ocr_text": raw_texts[idx] if idx < len(raw_texts) else "",
+                "translation": {
+                    "ind_Latn": t_id,
+                    "eng_Latn": t_en
+                }
+            })
+
+        if save_debug:
+            os.makedirs(debug_dir, exist_ok=True)
+            stem = os.path.splitext(os.path.basename(img_path))[0]
+            debug_json_path = os.path.join(debug_dir, f"{stem}_debug.json")
+            with open(debug_json_path, "w", encoding="utf-8") as f:
+                json.dump(debug_dump, f, indent=2, ensure_ascii=False)
+
         return {
             "detected_lang": page_lang,
-            "images": output_images
+            "images": output_images,
+            "debug_dump": debug_dump
         }
 
     # Alias untuk kompatibilitas
@@ -218,7 +275,9 @@ def run_translation_task(task_id: str, uploaded_path: str, target_lang: str):
             res = engine.process_single_page(
                 page_path,
                 target_lang=target_lang,
-                doc_lang_hint=document_language_lock
+                doc_lang_hint=document_language_lock,
+                save_debug=True,
+                debug_dir=os.path.join(task_dir, "debug")
             )
 
             # Kunci bahasa dokumen dari deteksi pertama
@@ -359,6 +418,19 @@ async def get_progress(task_id: str):
     if task_id not in TASKS:
         raise HTTPException(status_code=404, detail="Task tidak ditemukan.")
     return TASKS[task_id]
+
+@app.get("/api/task/{task_id}/debug/{page_idx}")
+async def get_task_debug(task_id: str, page_idx: int):
+    task_dir = os.path.join(TEMP_DIR, task_id)
+    debug_dir = os.path.join(task_dir, "debug")
+    if not os.path.exists(debug_dir):
+        raise HTTPException(status_code=404, detail="Debug data belum tersedia.")
+    files = sorted([f for f in os.listdir(debug_dir) if f.endswith("_debug.json")])
+    if page_idx < 1 or page_idx > len(files):
+        raise HTTPException(status_code=404, detail="Halaman debug tidak ditemukan.")
+    file_path = os.path.join(debug_dir, files[page_idx - 1])
+    with open(file_path, "r", encoding="utf-8") as f:
+        return json.load(f)
 
 if __name__ == "__main__":
     import uvicorn
