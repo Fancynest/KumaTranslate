@@ -1,5 +1,8 @@
+import os
+import gzip
+import math
 import re
-from typing import List, Dict, Set, Any, Optional
+from typing import List, Dict, Set, Any, Optional, Tuple
 
 # Kumpulan karakter pemisah / tanda baca & angka untuk mengekstrak teks inti (core)
 PUNCT_AND_DIGITS_REGEX = re.compile(
@@ -263,3 +266,318 @@ def assess_translation(src: str, tgt: str) -> List[str]:
         flags.append("possible_overgeneration")
 
     return flags
+
+
+# =======================================================================
+# PASCA-OCR TEKS LATIN / INGGRIS (Pure Python, Wordninja & SymSpell)
+# =======================================================================
+
+_DICT_LOADED = False
+ENGLISH_VOCAB: Set[str] = set()
+WORD_FREQ: Dict[str, int] = {}
+WORD_COST: Dict[str, float] = {}
+MAX_WORD_LEN = 20
+DELETES_1: Dict[str, List[str]] = {}
+
+SUPPLEMENTAL_VOCAB: Dict[str, int] = {
+    # Interjeksi dan onomatope komik umum
+    'oh': 500000000, 'ah': 300000000, 'eh': 200000000, 'uh': 200000000, 'um': 200000000,
+    'yeah': 400000000, 'yep': 100000000, 'nope': 100000000, 'huh': 150000000, 'whoa': 80000000,
+    'wow': 150000000, 'hey': 300000000, 'ok': 400000000, 'okay': 350000000,
+    # Kosakata komik & ejaan Amerika
+    'harbor': 150000000, 'harbors': 50000000,
+    # Kontraksi bahasa Inggris standar
+    "don't": 500000000, "can't": 400000000, "won't": 300000000, "it's": 600000000,
+    "that's": 450000000, "i'm": 500000000, "you're": 400000000, "they're": 350000000,
+    "we're": 300000000, "we've": 250000000, "isn't": 200000000, "aren't": 150000000,
+    "wasn't": 180000000, "weren't": 120000000, "couldn't": 180000000, "wouldn't": 180000000,
+    "shouldn't": 150000000, "haven't": 160000000, "hasn't": 140000000, "hadn't": 120000000,
+    "gonna": 200000000, "wanna": 180000000, "gotta": 150000000
+}
+
+
+def _ensure_english_dict_loaded() -> None:
+    """
+    Memuat kamus frekuensi bahasa Inggris (~82k kata) secara lazy ke memori.
+    Membangun cost table untuk pemecahan kata (Wordninja) dan index penghapusan (SymSpell).
+    """
+    global _DICT_LOADED, ENGLISH_VOCAB, WORD_FREQ, WORD_COST, MAX_WORD_LEN, DELETES_1
+    if _DICT_LOADED:
+        return
+
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    dict_paths = [
+        os.path.join(base_dir, "data", "frequency_dictionary_en_82_765.txt.gz"),
+        os.path.join(base_dir, "models", "frequency_dictionary_en_82_765.txt.gz")
+    ]
+
+    loaded = False
+    for p in dict_paths:
+        if os.path.exists(p):
+            try:
+                with gzip.open(p, "rt", encoding="utf-8-sig") as f:
+                    for line in f:
+                        parts = line.strip().split()
+                        if len(parts) >= 2:
+                            WORD_FREQ[parts[0].lower()] = int(parts[1])
+                loaded = True
+                break
+            except Exception:
+                continue
+
+    # Tambahkan suplemen kosakata komik & kontraksi
+    for term, count in SUPPLEMENTAL_VOCAB.items():
+        if term not in WORD_FREQ:
+            WORD_FREQ[term] = count
+
+    if not WORD_FREQ:
+        # Fallback darurat jika file tidak ada
+        for term, count in SUPPLEMENTAL_VOCAB.items():
+            WORD_FREQ[term] = count
+
+    ENGLISH_VOCAB = set(WORD_FREQ.keys())
+    total_count = sum(WORD_FREQ.values()) if WORD_FREQ else 1
+    log_total = math.log(total_count)
+
+    WORD_COST = {w: log_total - math.log(f) for w, f in WORD_FREQ.items()}
+    MAX_WORD_LEN = max(len(w) for w in WORD_FREQ) if WORD_FREQ else 20
+
+    # Index jarak edit 1 (SymSpell delete index)
+    for word in WORD_FREQ:
+        if len(word) < 2:
+            continue
+        for i in range(len(word)):
+            d = word[:i] + word[i+1:]
+            if d not in DELETES_1:
+                DELETES_1[d] = []
+            DELETES_1[d].append(word)
+
+    _DICT_LOADED = True
+
+
+def _damerau_levenshtein(s1: str, s2: str) -> int:
+    """Menghitung jarak edit Damerau-Levenshtein (transposition aware)."""
+    d = {}
+    len1, len2 = len(s1), len(s2)
+    for i in range(-1, len1 + 1):
+        d[(i, -1)] = i + 1
+    for j in range(-1, len2 + 1):
+        d[(-1, j)] = j + 1
+
+    for i in range(len1):
+        for j in range(len2):
+            cost = 0 if s1[i] == s2[j] else 1
+            d[(i, j)] = min(
+                d[(i - 1, j)] + 1,        # deletion
+                d[(i, j - 1)] + 1,        # insertion
+                d[(i - 1, j - 1)] + cost  # substitution
+            )
+            if i > 0 and j > 0 and s1[i] == s2[j - 1] and s1[i - 1] == s2[j]:
+                d[(i, j)] = min(d[(i, j)], d[(i - 2, j - 2)] + cost) # transposition
+    return d[(len1 - 1, len2 - 1)]
+
+
+def _match_case(src: str, repl: str) -> str:
+    """Menyesuaikan kapitalisasi repl sesuai pola kata src."""
+    if src.isupper():
+        return repl.upper()
+    elif src.istitle():
+        return repl.capitalize()
+    return repl.lower()
+
+
+def rejoin_hyphenated_words(text: str) -> str:
+    """
+    Menyambung kata yang terpotong tanda hubung di akhir baris ("SIGNA- TURE" -> "SIGNATURE")
+    hanya jika hasil gabungannya merupakan kata kamus yang valid; jika tidak, pertahankan tanda hubung.
+    """
+    _ensure_english_dict_loaded()
+    if not text:
+        return ""
+
+    def repl(m):
+        w1, w2 = m.group(1), m.group(2)
+        combined = w1 + w2
+        if combined.lower() in ENGLISH_VOCAB:
+            return _match_case(w1, combined)
+        return m.group(0)
+
+    # Deteksi pemisahan baris atau spasi setelah tanda hubung
+    return re.sub(r'\b([A-Za-z]+)-\s*[\r\n\s]+\s*([A-Za-z]+)\b', repl, text)
+
+
+def split_glued_token(token: str) -> str:
+    """
+    Memecah token alfabet yang menempel tanpa spasi (mis. 'YOUKNOW' -> 'YOU KNOW')
+    dengan Viterbi dynamic programming berbasis frekuensi kata unigram.
+    Hanya memecah jika SEMUA bagian pecahan adalah kata kamus yang sah.
+    """
+    _ensure_english_dict_loaded()
+    s = token.lower()
+    n = len(s)
+    if n <= 3 or s in ENGLISH_VOCAB:
+        return token
+
+    cost = [0.0] + [float('inf')] * n
+    best_prev = [0] * (n + 1)
+
+    for i in range(1, n + 1):
+        for j in range(max(0, i - MAX_WORD_LEN), i):
+            sub = s[j:i]
+            c = cost[j] + (WORD_COST[sub] if sub in WORD_COST else (i - j) * 20.0)
+            if c < cost[i]:
+                cost[i] = c
+                best_prev[i] = j
+
+    indices = []
+    curr = n
+    while curr > 0:
+        prev = best_prev[curr]
+        indices.append((prev, curr))
+        curr = prev
+    indices.reverse()
+
+    parts = [token[start:end] for start, end in indices]
+    # Syarat ketat: hanya pecah jika len > 1 dan SEMUA potongan adalah kata kamus yang sah
+    # (bagian dengan 1 huruf hanya diperbolehkan jika 'a' atau 'i')
+    all_valid = (
+        len(parts) > 1 and
+        all(
+            p.lower() in ENGLISH_VOCAB and (len(p) > 1 or p.lower() in {'a', 'i'})
+            for p in parts
+        )
+    )
+    if all_valid:
+        return ' '.join(parts)
+    return token
+
+
+def split_glued_words(text: str) -> str:
+    """
+    Memecah kata-kata yang menempel dalam teks komik dengan mempertahankan tanda baca.
+    """
+    if not text:
+        return ""
+    return re.sub(r'\b[A-Za-z]{4,}\b', lambda m: split_glued_token(m.group(0)), text)
+
+
+def correct_spelling_latin(
+    text: str,
+    chapter_counts: Optional[Dict[str, int]] = None,
+    glossary_terms: Optional[Set[str]] = None,
+    protected_names: Optional[Set[str]] = None
+) -> str:
+    """
+    Koreksi salah-baca huruf dengan SymSpell (kamus frekuensi Inggris).
+    Kecuali token yang:
+    - Muncul >= 2 kali dalam chapter
+    - Ada di glosarium
+    - Berupa nama diri yang dilindungi
+    Catatan: Huruf kapital semua (ALL CAPS) TIDAK BOLEH menjadi alasan untuk tidak mengoreksi
+    karena komik Barat/manga terjemahan umumnya menggunakan huruf kapital.
+    """
+    _ensure_english_dict_loaded()
+    if not text:
+        return ""
+
+    chap_counts = chapter_counts or {}
+    gloss_set = {t.lower() for t in (glossary_terms or set())}
+    name_set = {n.lower() for n in (protected_names or set())}
+
+    def repl(m):
+        tok = m.group(0)
+        low = tok.lower()
+
+        # 1. Jika sudah ada di kamus, tidak perlu dikoreksi
+        if low in ENGLISH_VOCAB:
+            return tok
+
+        # 2. Jangan koreksi jika token muncul >= 2 kali di chapter
+        if chap_counts.get(low, 0) >= 2:
+            return tok
+
+        # 3. Jangan koreksi jika ada di glosarium atau nama diri yang dilindungi
+        if low in gloss_set or low in name_set:
+            return tok
+
+        # 4. Jangan koreksi token sangat pendek (<= 2 huruf)
+        if len(low) <= 2:
+            return tok
+
+        # 5. Normalisasi karakter angka OCR yang sering tertukar dengan huruf (1->l, 0->o)
+        low_norm = re.sub(r'(?<=[a-z])1(?=[a-z])|^1(?=[a-z])|(?<=[a-z])1$', 'l', low)
+        low_norm = re.sub(r'(?<=[a-z])0(?=[a-z])|^0(?=[a-z])|(?<=[a-z])0$', 'o', low_norm)
+        if low_norm in ENGLISH_VOCAB:
+            return _match_case(tok, low_norm)
+
+        # 6. Cari kandidat SymSpell (jarak edit <= 2)
+        input_deletes = {low[:i] + low[i+1:] for i in range(len(low))}
+        cands = {}
+        for d in input_deletes:
+            if d in ENGLISH_VOCAB:
+                cands[d] = (1, WORD_FREQ.get(d, 0))
+            if d in DELETES_1:
+                for cand in DELETES_1[d]:
+                    if cand not in cands:
+                        dist = _damerau_levenshtein(low, cand)
+                        if dist <= 2:
+                            cands[cand] = (dist, WORD_FREQ.get(cand, 0))
+
+        if not cands:
+            return tok
+
+        sorted_cands = sorted(cands.items(), key=lambda x: (x[1][0], -x[1][1]))
+        best_cand, (dist, freq) = sorted_cands[0]
+
+        # Hanya terima jika jarak 1 dengan frekuensi meyakinkan, atau jarak 2 dengan frekuensi tinggi
+        if (dist == 1 and freq >= 10000) or (dist == 2 and freq >= 500000):
+            return _match_case(tok, best_cand)
+        return tok
+
+    return re.sub(r'\b[A-Za-z0-9]+(?:\'[A-Za-z]+)?\b', repl, text)
+
+
+def calculate_ocr_quality(text: str) -> float:
+    """
+    Menghitung proporsi token kata yang valid dalam kamus bahasa Inggris (0.0 - 1.0).
+    Jika < 0.6: mengindikasikan OCR berkualitas rendah / corrupt / salah bahasa.
+    """
+    _ensure_english_dict_loaded()
+    if not text or not text.strip():
+        return 1.0
+
+    words = re.findall(r'\b[A-Za-z]+(?:\'[A-Za-z]+)?\b', text)
+    if not words:
+        return 1.0
+
+    in_vocab = sum(1 for w in words if w.lower() in ENGLISH_VOCAB)
+    return in_vocab / float(len(words))
+
+
+def post_process_latin_ocr(
+    text: str,
+    chapter_counts: Optional[Dict[str, int]] = None,
+    glossary_terms: Optional[Set[str]] = None,
+    protected_names: Optional[Set[str]] = None
+) -> Tuple[str, float]:
+    """
+    Pipeline pasca-OCR lengkap untuk teks Latin komik:
+    1. Sambung kata terpotong tanda hubung akhir baris ("SIGNA- TURE" -> "SIGNATURE")
+    2. Pecah token menempel ("YOUKNOW" -> "YOU KNOW")
+    3. Koreksi salah baca dengan SymSpell
+    4. Hitung skor ocr_quality
+    """
+    if not text or not text.strip():
+        return "", 1.0
+
+    # Langkah 1: Sambung tanda hubung
+    cleaned = rejoin_hyphenated_words(text)
+    # Langkah 2: Pecah kata yang menempel
+    cleaned = split_glued_words(cleaned)
+    # Langkah 3: Koreksi ejaan OCR
+    cleaned = correct_spelling_latin(cleaned, chapter_counts, glossary_terms, protected_names)
+    # Langkah 4: Hitung kualitas OCR
+    quality = calculate_ocr_quality(cleaned)
+
+    return cleaned, quality
+

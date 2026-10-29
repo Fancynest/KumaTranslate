@@ -12,7 +12,12 @@ from src.text_utils import (
     apply_glossary_source,
     is_hallucinated_short,
     is_strong_name_candidate,
-    assess_translation
+    assess_translation,
+    rejoin_hyphenated_words,
+    split_glued_words,
+    correct_spelling_latin,
+    calculate_ocr_quality,
+    post_process_latin_ocr
 )
 from src.translator import MangaTranslator
 
@@ -141,6 +146,73 @@ class TestTextUtils(unittest.TestCase):
         # Overgeneration pada teks pendek
         flags_over = assess_translation("やめろ", "Jangan lakukan hal itu lagi karena itu sangat berbahaya bagi kita")
         self.assertIn("possible_overgeneration", flags_over)
+
+    def test_rejoin_hyphenated_words(self):
+        # Menyambung hanya jika gabungannya kata kamus yang valid
+        self.assertEqual(
+            rejoin_hyphenated_words("PLEASE PROVIDE YOUR SIGNA- TURE HERE"),
+            "PLEASE PROVIDE YOUR SIGNATURE HERE"
+        )
+        self.assertEqual(
+            rejoin_hyphenated_words("THE CONDI-\nTION WAS MET"),
+            "THE CONDITION WAS MET"
+        )
+        # Jika bukan kata kamus utuh, pertahankan tanda hubung
+        self.assertEqual(
+            rejoin_hyphenated_words("A WELL- KNOWN MUSHROOM- THINGIES"),
+            "A WELL- KNOWN MUSHROOM- THINGIES"
+        )
+
+    def test_split_glued_words(self):
+        # Memecah kata menempel dengan menjaga kapitalisasi
+        self.assertEqual(
+            split_glued_words("YOUKNOW THAT AREMANY GIRLS"),
+            "YOU KNOW THAT ARE MANY GIRLS"
+        )
+        self.assertEqual(
+            split_glued_words("YouKnow That AreMany Girls"),
+            "You Know That Are Many Girls"
+        )
+        # Kata tunggal yang sudah valid di kamus tidak boleh dipecah sembarangan
+        self.assertEqual(
+            split_glued_words("TOGETHER WE HAVE SIGNATURE"),
+            "TOGETHER WE HAVE SIGNATURE"
+        )
+
+    def test_correct_spelling_latin(self):
+        # Salah baca huruf umum dikoreksi ke kata kamus
+        self.assertEqual(correct_spelling_latin("teh cat"), "the cat")
+        # Huruf kapital semua TIDAK BOLEH jadi alasan untuk tidak mengoreksi
+        self.assertEqual(correct_spelling_latin("TEH CAT"), "THE CAT")
+
+        # Pengecualian: token muncul >= 2 kali di chapter tidak boleh dikoreksi
+        res_chap = correct_spelling_latin("Wikipe is here", chapter_counts={"wikipe": 2})
+        self.assertEqual(res_chap, "Wikipe is here")
+
+        # Pengecualian: ada di glosarium tidak boleh dikoreksi
+        res_gloss = correct_spelling_latin("Sasuke is ninja", glossary_terms={"Sasuke"})
+        self.assertEqual(res_gloss, "Sasuke is ninja")
+
+        # Pengecualian: nama yang dilindungi
+        res_name = correct_spelling_latin("Naruto ran fast", protected_names={"Naruto"})
+        self.assertEqual(res_name, "Naruto ran fast")
+
+    def test_calculate_ocr_quality(self):
+        # Kalimat bahasa Inggris sempurna -> 1.0
+        q_high = calculate_ocr_quality("YOU KNOW HOW THERE ARE MANY THINGS")
+        self.assertEqual(q_high, 1.0)
+
+        # Karakter sampah acak / korup -> skor rendah (< 0.6)
+        q_low = calculate_ocr_quality("CWH SIH aia nOx")
+        self.assertLess(q_low, 0.6)
+
+    def test_post_process_latin_ocr_pipeline(self):
+        text = "YOUKNOW THE SIGNA- TURE IS IN TEH BOOK"
+        processed, quality = post_process_latin_ocr(text)
+        self.assertIn("YOU KNOW", processed)
+        self.assertIn("SIGNATURE", processed)
+        self.assertIn("THE BOOK", processed)
+        self.assertGreaterEqual(quality, 0.8)
 
 
 class TestMockTranslateBatch(unittest.TestCase):

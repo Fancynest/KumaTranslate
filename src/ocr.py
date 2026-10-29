@@ -58,6 +58,7 @@ class MultiLingualOCR:
 
         # 3. Engine Korea (Lazy loaded agar hemat RAM/VRAM)
         self._korean_ocr = None
+        self._english_secondary_reader = None
         print("[OCR] Engine OCR Multi-Bahasa siap digunakan.")
 
     def _get_korean_ocr(self):
@@ -66,6 +67,37 @@ class MultiLingualOCR:
             print("[OCR] Memuat engine OCR Korea (Manhwa)...")
             self._korean_ocr = easyocr.Reader(['ko', 'en'], gpu=(self.device == "cuda"))
         return self._korean_ocr
+
+    def _get_english_ocr_secondary(self):
+        if self._english_secondary_reader is None:
+            import easyocr
+            print("[OCR] Memuat engine OCR Latin sekunder (EasyOCR)...")
+            self._english_secondary_reader = easyocr.Reader(['en'], gpu=(self.device == "cuda"))
+        return self._english_secondary_reader
+
+    def read_text_secondary(self, image_input: Union[str, Image.Image], lang: str = "en") -> str:
+        """
+        Fallback engine OCR saat kualitas pembacaan engine utama rendah (ocr_quality < 0.6):
+        Untuk Latin/Inggris: mencoba EasyOCR(['en']) sebagai engine kedua.
+        """
+        if isinstance(image_input, str):
+            if not os.path.exists(image_input):
+                return ""
+            img = Image.open(image_input).convert("RGB")
+        else:
+            img = image_input.convert("RGB")
+
+        img_np = np.array(img)
+        if lang in ["eng_Latn", "en"]:
+            try:
+                reader = self._get_english_ocr_secondary()
+                results = reader.readtext(img_np, detail=0)
+                return " ".join(results).strip() if results else ""
+            except Exception as e:
+                print(f"[OCR] Info: Secondary engine EasyOCR gagal: {e}")
+                res, _ = self.rapid_ocr(img_np)
+                return " ".join([item[1] for item in res]).strip() if res else ""
+        return ""
 
     def read_text(self, image_input: Union[str, Image.Image], lang_hint: Optional[str] = None) -> str:
         """

@@ -211,6 +211,18 @@
             </div>
           </div>
         </div>
+
+        <!-- Low Quality OCR Bubbles Warning Card (Step 4) -->
+        <div id="low-ocr-card" class="hidden border border-amber-900/50 bg-amber-950/20 rounded-lg p-3.5 space-y-2 text-xs">
+          <div class="flex items-center space-x-2 text-amber-400 font-semibold">
+            <i data-lucide="alert-triangle" class="w-4 h-4"></i>
+            <span>Balon dengan Kualitas OCR Rendah (ocr_low_quality)</span>
+          </div>
+          <p class="text-zinc-400 text-[11px]">
+            Balon-balon berikut memiliki skor kecocokan kamus &lt; 0.6 sehingga dibiarkan dalam gambar aslinya (tidak ditimpa terjemahan hibrida demi menjaga estetika komik):
+          </p>
+          <div id="low-ocr-list" class="space-y-1 font-mono text-[11px] text-zinc-300"></div>
+        </div>
       </div>
     </div>
 
@@ -490,6 +502,21 @@
       originalPages = result.original_pages;
       translatedPages = result.translated_pages;
       currentPageIndex = 0;
+
+      const lowOcrCard = document.getElementById('low-ocr-card');
+      const lowOcrList = document.getElementById('low-ocr-list');
+      if (result.low_quality_bubbles && result.low_quality_bubbles.length > 0) {
+        lowOcrCard.classList.remove('hidden');
+        lowOcrList.innerHTML = '';
+        result.low_quality_bubbles.forEach(b => {
+          const item = document.createElement('div');
+          item.className = 'flex items-center justify-between bg-zinc-900/80 px-2.5 py-1.5 rounded border border-zinc-800';
+          item.innerHTML = `<span>Hal ${b.page} Balon #${b.bubble_id}: "${b.ocr_text}"</span><span class="text-amber-400 font-sans text-[11px]">Skor: ${(b.ocr_quality * 100).toFixed(0)}%</span>`;
+          lowOcrList.appendChild(item);
+        });
+      } else {
+        lowOcrCard.classList.add('hidden');
+      }
 
       if (originalPages.length > 1) {
         paginationControls.classList.remove('hidden');

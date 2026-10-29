@@ -33,7 +33,9 @@ from src.text_utils import (
     normalize_ocr_text,
     is_strong_name_candidate,
     is_hallucinated_short,
-    assess_translation
+    assess_translation,
+    post_process_latin_ocr,
+    calculate_ocr_quality
 )
 from pydantic import BaseModel
 
@@ -123,25 +125,73 @@ class TranslationEngine:
                 "debug_dump": empty_dump
             }
 
-        # 1. OCR teks dan Filter sebelum translate
-        raw_texts = []
-        valid_bubbles = []
+        # Muat glosarium aktif untuk halaman ini lebih awal
+        active_glossary = dict(glossary or {})
+        if series_id and not active_glossary:
+            active_glossary = self.glossary_mgr.load_glossary(series_id)
+        if translation_memory:
+            active_glossary.update(translation_memory.glossary)
+        glossary_terms = set(active_glossary.keys())
 
+        # 1. OCR teks dan Filter sebelum translate
+        raw_candidates = []
         for b in bubbles:
             # Lewati type=="free_text" secara default (kecuali translate_free_text=True) agar tidak menimpa SFX
             if not translate_free_text and b.get("type") == "free_text":
                 continue
-
             raw = self.ocr.read_text(b["crop"], lang_hint=doc_lang_hint)
             if raw and raw.strip():
-                t_clean = normalize_ocr_text(raw)
-                # Lewati teks yang setelah dibuang spasi dan tanda baca kurang dari 2 karakter
-                clean_no_punct = PUNCT_REGEX.sub("", t_clean)
-                if len(clean_no_punct) < 2:
-                    continue
+                raw_candidates.append((b, raw.strip()))
 
-                raw_texts.append(t_clean)
-                valid_bubbles.append(b)
+        # Deteksi apakah halaman didominasi teks Latin/Inggris untuk analisis frekuensi kata
+        all_words_on_page: Dict[str, int] = {}
+        for _, r_txt in raw_candidates:
+            for w in re.findall(r'[A-Za-z]+', r_txt):
+                lw = w.lower()
+                all_words_on_page[lw] = all_words_on_page.get(lw, 0) + 1
+
+        raw_texts = []
+        valid_bubbles = []
+
+        for b, raw in raw_candidates:
+            is_latin = (
+                doc_lang_hint in ["eng_Latn", "en"] or
+                (not CJK_REGEX.search(raw) and bool(re.search(r'[A-Za-z]{2,}', raw)))
+            )
+
+            if is_latin:
+                # Pasca-OCR Latin: sambung tanda hubung, pecah kata menempel, SymSpell, dan hitung ocr_quality
+                t_clean, quality = post_process_latin_ocr(
+                    raw,
+                    chapter_counts=all_words_on_page,
+                    glossary_terms=glossary_terms
+                )
+                if quality < 0.6:
+                    # Coba ulang dengan engine kedua (EasyOCR English)
+                    raw_sec = self.ocr.read_text_secondary(b["crop"], lang="en")
+                    if raw_sec and raw_sec.strip():
+                        t_sec, q_sec = post_process_latin_ocr(
+                            raw_sec.strip(),
+                            chapter_counts=all_words_on_page,
+                            glossary_terms=glossary_terms
+                        )
+                        if q_sec > quality:
+                            t_clean, quality = t_sec, q_sec
+
+                b["ocr_quality"] = quality
+                b["ocr_low_quality"] = bool(quality < 0.6)
+            else:
+                t_clean = normalize_ocr_text(raw)
+                b["ocr_quality"] = 1.0
+                b["ocr_low_quality"] = False
+
+            # Lewati teks yang setelah dibuang spasi dan tanda baca kurang dari 2 karakter
+            clean_no_punct = PUNCT_REGEX.sub("", t_clean)
+            if len(clean_no_punct) < 2:
+                continue
+
+            raw_texts.append(t_clean)
+            valid_bubbles.append(b)
 
         if not raw_texts:
             empty_dump = {
@@ -242,11 +292,15 @@ class TranslationEngine:
                     res_en_texts.append(tgt_enforced)
 
         # 4. Inpainting: Hapus teks asli hanya pada balon yang memiliki terjemahan valid
-        #    Jika terjemahan kosong / dibuang karena halusinasi, gambar asli dipertahankan tanpa ditimpa
+        #    Jika terjemahan kosong / dibuang karena halusinasi, atau ocr_low_quality,
+        #    gambar asli dipertahankan tanpa ditimpa teks cacat/hibrida.
         active_bubbles = []
         for idx, b in enumerate(valid_bubbles):
             t_id = res_id_texts[idx] if idx < len(res_id_texts) else ""
             t_en = res_en_texts[idx] if idx < len(res_en_texts) else ""
+            if b.get("ocr_low_quality"):
+                print(f"[OCR] Balon #{idx+1} dibiarkan asli karena ocr_low_quality ({b.get('ocr_quality', 0):.2f})")
+                continue
             if (target_lang in ["ind_Latn", "both"] and t_id.strip()) or (target_lang == "eng_Latn" and t_en.strip()):
                 active_bubbles.append((b, t_id, t_en))
 
@@ -288,6 +342,12 @@ class TranslationEngine:
             t_id = res_id_texts[idx] if idx < len(res_id_texts) else ""
             t_en = res_en_texts[idx] if idx < len(res_en_texts) else ""
             s_text = raw_texts[idx] if idx < len(raw_texts) else ""
+            q_id = assess_translation(s_text, t_id)
+            q_en = assess_translation(s_text, t_en)
+            if b.get("ocr_low_quality"):
+                q_id.append("ocr_low_quality")
+                q_en.append("ocr_low_quality")
+
             debug_dump["bubbles"].append({
                 "bubble_id": idx + 1,
                 "bbox": list(b.get("safe_bbox", b.get("bubble_bbox", b.get("bbox")))),
@@ -295,15 +355,26 @@ class TranslationEngine:
                 "type": b.get("type", "text_bubble"),
                 "source": b.get("source", "heuristic"),
                 "ocr_text": s_text,
+                "ocr_quality": round(float(b.get("ocr_quality", 1.0)), 3),
+                "ocr_low_quality": bool(b.get("ocr_low_quality", False)),
                 "translation": {
                     "ind_Latn": t_id,
                     "eng_Latn": t_en
                 },
                 "quality_flags": {
-                    "ind_Latn": assess_translation(s_text, t_id),
-                    "eng_Latn": assess_translation(s_text, t_en)
+                    "ind_Latn": q_id,
+                    "eng_Latn": q_en
                 }
             })
+
+        debug_dump["low_quality_bubbles"] = [
+            {
+                "bubble_id": b["bubble_id"],
+                "ocr_text": b["ocr_text"],
+                "ocr_quality": b["ocr_quality"]
+            }
+            for b in debug_dump["bubbles"] if b.get("ocr_low_quality")
+        ]
 
         if save_debug:
             os.makedirs(debug_dir, exist_ok=True)
@@ -371,6 +442,7 @@ def run_translation_task(
         en_pages = []
         orig_web_paths = []
         trans_web_paths = []
+        low_quality_bubbles_all = []
 
         # Translation memory & Glosarium per seri
         series_glossary = engine.glossary_mgr.load_glossary(series_id) if series_id else {}
@@ -409,6 +481,15 @@ def run_translation_task(
             if document_language_lock is None and res.get("detected_lang"):
                 document_language_lock = res["detected_lang"]
                 print(f"[OPTIMASI] Bahasa dokumen dikunci ke: {document_language_lock} ({get_language_name(document_language_lock)})")
+
+            if res.get("debug_dump", {}).get("low_quality_bubbles"):
+                for lqb in res["debug_dump"]["low_quality_bubbles"]:
+                    low_quality_bubbles_all.append({
+                        "page": i + 1,
+                        "bubble_id": lqb["bubble_id"],
+                        "ocr_text": lqb["ocr_text"],
+                        "ocr_quality": lqb["ocr_quality"]
+                    })
 
             res_images = res["images"]
             base = os.path.splitext(os.path.basename(page_path))[0]
@@ -473,7 +554,8 @@ def run_translation_task(
             "duration_seconds": round(time.time() - t0, 1),
             "downloads": downloads,
             "original_pages": orig_web_paths,
-            "translated_pages": trans_web_paths
+            "translated_pages": trans_web_paths,
+            "low_quality_bubbles": low_quality_bubbles_all
         }
 
     except Exception as e:

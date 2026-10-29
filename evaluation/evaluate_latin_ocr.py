@@ -53,7 +53,8 @@ def run_evaluation(
     engine_name: str = "rapid",
     crops_dir: str = "evaluation/ocr_latin_crops",
     gt_file: str = "evaluation/ocr_latin_ground_truth.json",
-    preprocess_fn = None
+    preprocess_fn = None,
+    postprocess_fn = None
 ) -> Dict[str, Any]:
     with open(gt_file, "r", encoding="utf-8") as f:
         ground_truth: Dict[str, str] = json.load(f)
@@ -99,6 +100,8 @@ def run_evaluation(
 
         img_np = np.array(img)
         pred_text = ocr_func(img_np)
+        if postprocess_fn:
+            pred_text = postprocess_fn(pred_text)
 
         c_dist, c_len = compute_cer(ref_text, pred_text)
         w_dist, w_len = compute_wer(ref_text, pred_text)
@@ -136,10 +139,26 @@ def run_evaluation(
 
 
 if __name__ == "__main__":
-    engine_arg = sys.argv[1] if len(sys.argv) > 1 else "rapid"
-    results = run_evaluation(engine_name=engine_arg)
+    engine_arg = "rapid"
+    use_postprocess = False
+    for arg in sys.argv[1:]:
+        if arg == "--postprocess":
+            use_postprocess = True
+        elif not arg.startswith("--"):
+            engine_arg = arg
+
+    post_fn = None
+    if use_postprocess:
+        from src.text_utils import post_process_latin_ocr
+        # Pass dummy chapter counts or empty dict
+        def post_fn(t):
+            cleaned, _ = post_process_latin_ocr(t)
+            return cleaned
+
+    results = run_evaluation(engine_name=engine_arg, postprocess_fn=post_fn)
+    label = f"{engine_arg.upper()} {'+ POSTPROCESS' if use_postprocess else ''}"
     print(f"\n{'='*60}")
-    print(f"HASIL EVALUASI OCR LATIN: {engine_arg.upper()}")
+    print(f"HASIL EVALUASI OCR LATIN: {label}")
     print(f"{'='*60}")
     print(f"Total Balon Teruji : {results['total_samples']}")
     print(f"Character Error Rate (CER) : {results['overall_cer']}% ({results['total_char_errors']}/{results['total_ref_chars']} karakter)")
