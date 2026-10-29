@@ -2,7 +2,7 @@ import os
 import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict, Any
 
 class MangaRenderer:
     def __init__(self, font_path: str = "C:\\Windows\\Fonts\\comicbd.ttf"):
@@ -251,7 +251,9 @@ class MangaRenderer:
         text: str,
         bubble_mask: Optional[np.ndarray] = None,
         text_color: Tuple[int, int, int] = (15, 15, 15),
-        stroke_color: Tuple[int, int, int] = (255, 255, 255)
+        stroke_color: Tuple[int, int, int] = (255, 255, 255),
+        target_max_font: Optional[int] = None,
+        target_min_font: Optional[int] = None
     ) -> Image.Image:
         """
         Render teks terjemahan ke dalam balon kata (safe_bbox).
@@ -267,8 +269,8 @@ class MangaRenderer:
         bx, by, bw, bh = bbox
 
         # Batas maksimal dan minimal font proporsional ukuran balon (min 11-12px)
-        max_font = max(14, min(34, int(bh * 0.38)))
-        min_font = max(11, min(14, int(min(bw, bh) * 0.12)))
+        max_font = target_max_font if target_max_font is not None else max(14, min(34, int(bh * 0.38)))
+        min_font = target_min_font if target_min_font is not None else max(11, min(14, int(min(bw, bh) * 0.12)))
 
         font, lines, line_positions, spacing = self._fit_text_adaptive(
             draw, clean_text, bbox, mask=bubble_mask, max_font=max_font, min_font=min_font
@@ -288,6 +290,108 @@ class MangaRenderer:
                 stroke_width=stroke_w,
                 stroke_fill=stroke_color
             )
+
+        return img_out
+
+    def render_page_bubbles(
+        self,
+        image: Image.Image,
+        bubble_items: List[Dict[str, Any]],
+        text_color: Tuple[int, int, int] = (15, 15, 15),
+        stroke_color: Tuple[int, int, int] = (255, 255, 255)
+    ) -> Image.Image:
+        """
+        Menyelaraskan ukuran font antar balon kata dalam satu halaman (page-level harmonization):
+        1. Menghitung ukuran font optimal awal per balon kata.
+        2. Menghitung median ukuran font satu halaman.
+        3. Membatasi ukuran font tiap balon pada rentang [0.70 * median, 1.30 * median] (+/- 30%),
+           kecuali teks tidak muat sehingga diizinkan mengecil.
+        4. Deteksi bug balon luas dengan font kecil: jika area balon luas (>= 6000 px^2)
+           namun safe_bbox terlalu sempit (aspect ratio sempit < 0.45) atau font < 0.70 * median,
+           periksa safe_bbox terhadap bubble_bbox/mask dan perluas batas render.
+        """
+        if not bubble_items:
+            return image
+
+        valid_items = [b for b in bubble_items if b.get("text") and str(b.get("text")).strip()]
+        if not valid_items:
+            return image
+
+        img_out = image.copy()
+        draw = ImageDraw.Draw(img_out)
+
+        # 1. First Pass: simulasi ukuran font optimal per balon & koreksi safe_bbox sempit pada balon luas
+        fitted_info = []
+        for item in valid_items:
+            text = str(item["text"]).strip()
+            s_box = list(item.get("safe_bbox") or item.get("bubble_bbox") or item["bbox"])
+            b_box = list(item.get("bubble_bbox") or s_box)
+            mask = item.get("bubble_mask")
+
+            area_outer = b_box[2] * b_box[3]
+            # Deteksi anomali balon luas dengan safe_bbox sempit:
+            # Jika area balon luas (>= 6000 px^2) tetapi lebar safe_bbox sangat sempit (< 0.40 * tinggi atau < 55px)
+            # sedangkan bubble_bbox jauh lebih lebar, gunakan bubble_bbox dengan padding moderat
+            if area_outer >= 6000 and (s_box[2] < 55 or (s_box[2] / max(1, s_box[3])) < 0.40) and b_box[2] >= 65:
+                pad_w = int(b_box[2] * 0.10)
+                pad_h = int(b_box[3] * 0.10)
+                s_box = [
+                    b_box[0] + pad_w,
+                    b_box[1] + pad_h,
+                    max(20, b_box[2] - 2 * pad_w),
+                    max(20, b_box[3] - 2 * pad_h)
+                ]
+
+            max_f = max(14, min(34, int(s_box[3] * 0.38)))
+            min_f = max(11, min(14, int(min(s_box[2], s_box[3]) * 0.12)))
+
+            font, lines, positions, spacing = self._fit_text_adaptive(
+                draw, text, tuple(s_box), mask=mask, max_font=max_f, min_font=min_f
+            )
+
+            fitted_info.append({
+                "item": item,
+                "text": text,
+                "render_box": tuple(s_box),
+                "mask": mask,
+                "base_font_size": font.size,
+                "min_font": min_f
+            })
+
+        # 2. Hitung median font size halaman
+        font_sizes = [f["base_font_size"] for f in fitted_info]
+        import statistics
+        page_median_font = statistics.median(font_sizes)
+        font_floor = max(11, int(round(page_median_font * 0.70)))
+        font_ceil = min(36, int(round(page_median_font * 1.30)))
+
+        # 3. Second Pass: Render dengan pembatasan [font_floor, font_ceil]
+        for f_data in fitted_info:
+            r_box = f_data["render_box"]
+            text = f_data["text"]
+            mask = f_data["mask"]
+            min_f = f_data["min_font"]
+
+            # Coba fit dengan batas harmonis (max_font = font_ceil)
+            # Jika teks muat di atas font_floor, font akan berada dalam range [font_floor, font_ceil]
+            # Jika teks panjang tidak muat di font_floor, diizinkan turun hingga min_f
+            font, lines, line_positions, spacing = self._fit_text_adaptive(
+                draw, text, r_box, mask=mask, max_font=font_ceil, min_font=min_f
+            )
+
+            if not lines or not line_positions:
+                continue
+
+            stroke_w = 1 if font.size < 14 else 2
+            for line, (lx, ly) in zip(lines, line_positions):
+                draw.text(
+                    (lx, ly),
+                    line,
+                    fill=text_color,
+                    font=font,
+                    stroke_width=stroke_w,
+                    stroke_fill=stroke_color
+                )
 
         return img_out
 

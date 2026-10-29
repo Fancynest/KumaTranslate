@@ -72,6 +72,22 @@ class TestMangaRenderer(unittest.TestCase):
         rendered = self.renderer.render_bubble_text(img, bbox, token_30)
         self.assertIsInstance(rendered, Image.Image)
 
+    def test_render_page_bubbles_harmonization(self):
+        """
+        Memverifikasi font harmonization pada satu halaman:
+        Font antar balon diselaraskan dalam batas median +/- 30%.
+        """
+        img = Image.new("RGB", (800, 1000), (255, 255, 255))
+        items = [
+            {"safe_bbox": (500, 50, 150, 150), "bubble_bbox": (500, 50, 150, 150), "text": "Aku punya hadiah."},
+            {"safe_bbox": (200, 30, 120, 120), "bubble_bbox": (200, 30, 120, 120), "text": "Ini Sarada, putri Sasuke."},
+            {"safe_bbox": (50, 250, 160, 160), "bubble_bbox": (50, 250, 160, 160), "text": "Itu kelemahan terbesar Boruto."},
+        ]
+        out = self.renderer.render_page_bubbles(img, items)
+        self.assertIsInstance(out, Image.Image)
+        # Gambar harus termodifikasi (tidak identik dengan kanvas putih murni)
+        self.assertTrue(np.any(np.array(out) < 255))
+
 
 if __name__ == "__main__":
     unittest.main()

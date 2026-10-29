@@ -324,21 +324,29 @@ class TranslationEngine:
         output_images = {}
         if target_lang in ["ind_Latn", "both"]:
             img_id = cleaned_img.copy()
-            for b, t_id, _ in active_bubbles:
-                if t_id.strip():
-                    render_box = b.get("safe_bbox", b.get("bubble_bbox", b["bbox"]))
-                    b_mask = b.get("bubble_mask")
-                    img_id = self.renderer.render_bubble_text(img_id, render_box, t_id, bubble_mask=b_mask)
-            output_images["ind_Latn"] = img_id
+            items_id = [
+                {
+                    "safe_bbox": b.get("safe_bbox", b.get("bubble_bbox", b["bbox"])),
+                    "bubble_bbox": b.get("bubble_bbox", b["bbox"]),
+                    "bubble_mask": b.get("bubble_mask"),
+                    "text": t_id
+                }
+                for b, t_id, _ in active_bubbles if t_id.strip()
+            ]
+            output_images["ind_Latn"] = self.renderer.render_page_bubbles(img_id, items_id)
 
         if target_lang in ["eng_Latn", "both"]:
             img_en = cleaned_img.copy()
-            for b, _, t_en in active_bubbles:
-                if t_en.strip():
-                    render_box = b.get("safe_bbox", b.get("bubble_bbox", b["bbox"]))
-                    b_mask = b.get("bubble_mask")
-                    img_en = self.renderer.render_bubble_text(img_en, render_box, t_en, bubble_mask=b_mask)
-            output_images["eng_Latn"] = img_en
+            items_en = [
+                {
+                    "safe_bbox": b.get("safe_bbox", b.get("bubble_bbox", b["bbox"])),
+                    "bubble_bbox": b.get("bubble_bbox", b["bbox"]),
+                    "bubble_mask": b.get("bubble_mask"),
+                    "text": t_en
+                }
+                for b, _, t_en in active_bubbles if t_en.strip()
+            ]
+            output_images["eng_Latn"] = self.renderer.render_page_bubbles(img_en, items_en)
 
         # 6. Susun Debug Dump JSON (bubble_id, bbox, text_bbox, type, source, ocr_text, translation)
         debug_dump = {
