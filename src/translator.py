@@ -9,7 +9,7 @@ import torch
 from PIL import Image
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 from typing import Optional, List, Dict, Any, Tuple
-from src.text_utils import normalize_ocr_text, apply_glossary_source, split_sentences
+from src.text_utils import normalize_ocr_text, apply_glossary_source, split_sentences, postprocess_nllb_indonesian
 
 logger = logging.getLogger("KumaTranslate.Translator")
 
@@ -458,6 +458,9 @@ class MangaTranslator:
             else:
                 segs = translated_segments[start:end]
                 combined = " ".join([s for s in segs if s.strip()])
+                # Pasca-pemrosesan khusus Indonesia: perbaiki pronoun, nama, kosakata NLLB
+                if target == "ind_Latn" and combined:
+                    combined = postprocess_nllb_indonesian(combined)
                 final_results.append(combined)
 
         return final_results

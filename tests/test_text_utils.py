@@ -18,7 +18,8 @@ from src.text_utils import (
     correct_spelling_latin,
     calculate_ocr_quality,
     post_process_latin_ocr,
-    filter_cross_bubble_hallucinations
+    filter_cross_bubble_hallucinations,
+    postprocess_nllb_indonesian
 )
 from src.translator import MangaTranslator
 
@@ -356,6 +357,93 @@ class TestMockTranslateBatch(unittest.TestCase):
         self.assertEqual(results[1], "TR_Minatoは来た。 TR_Minaではない。")
         self.assertEqual(results[2], "TR_ボルトは強い！")
         self.assertEqual(results[3], "")
+
+
+class TestPostprocessNllbIndonesian(unittest.TestCase):
+    """Tes pasca-pemrosesan output NLLB untuk Bahasa Indonesia manga."""
+
+    def test_pronoun_saya_to_aku(self):
+        """Pronoun formal 'saya'/'Saya' diganti ke 'aku'/'Aku'."""
+        self.assertEqual(postprocess_nllb_indonesian("Saya tidak tahu."), "Aku tidak tahu.")
+        self.assertEqual(postprocess_nllb_indonesian("Ini saya yang bilang."), "Ini aku yang bilang.")
+
+    def test_pronoun_anda_to_kamu(self):
+        """Pronoun formal 'Anda'/'anda' diganti ke 'kamu'."""
+        self.assertEqual(postprocess_nllb_indonesian("Anda perlu pergi."), "kamu perlu pergi.")
+        self.assertEqual(postprocess_nllb_indonesian("Apakah Anda tahu?"), "Apakah kamu tahu?")
+
+    def test_name_bolt_to_boruto(self):
+        """'Bolt' (salah terjemahan ボルト oleh NLLB) diperbaiki ke 'Boruto'."""
+        self.assertEqual(
+            postprocess_nllb_indonesian("Itu kelemahan terbesar Bolt."),
+            "Itu kelemahan terbesar Boruto."
+        )
+        self.assertEqual(postprocess_nllb_indonesian("Bolto sangat kuat."), "Boruto sangat kuat.")
+
+    def test_name_salad_capital_to_sarada(self):
+        """'Salad' kapital atau frase 'ini salad' (salah terjemahan サラダ nama) diperbaiki ke 'Sarada'."""
+        self.assertEqual(
+            postprocess_nllb_indonesian("Ini Salad, putri Sasuke."),
+            "Ini Sarada, putri Sasuke."
+        )
+        self.assertEqual(
+            postprocess_nllb_indonesian("Ini salad..."),
+            "Ini Sarada..."
+        )
+
+    def test_hadiah_tangan_to_buah_tangan(self):
+        """'hadiah tangan' (terjemahan harfiah 手土産) diperbaiki ke 'buah tangan'."""
+        self.assertEqual(
+            postprocess_nllb_indonesian("Aku punya hadiah tangan."),
+            "Aku bawakan buah tangan."
+        )
+
+    def test_manga_structural_artifacts(self):
+        """Koreksi pola salah tafsir struktural NLLB pada kalimat manga."""
+        # 1. Klausa bertingkat 'にして' -> 'Aku akan membuatmu putri Sasuke'
+        self.assertEqual(
+            postprocess_nllb_indonesian("Aku akan membuatmu putriku Sasuke."),
+            "Putri Sasuke."
+        )
+        # 2. Salah tafsir 'この娘' -> 'putriku'
+        self.assertEqual(
+            postprocess_nllb_indonesian("Jika ada masalah dengan putriku, itu akan berubah."),
+            "Kalau sudah soal gadis ini, sikapnya langsung berubah."
+        )
+        # 3. Frase 冷静さを欠き判断力を鈍らせる
+        self.assertEqual(
+            postprocess_nllb_indonesian("Tidak ada yang tenang, tidak ada yang bijaksana."),
+            "Kehilangan ketenangan dan menumpulkan pertimbangan."
+        )
+        # 4. Hubungan guru/murid (師であるサスケ -> Sasuke, guru)
+        self.assertEqual(
+            postprocess_nllb_indonesian("Tapi apa dia punya rasa bersalah kepada Sasuke, guru?"),
+            "Tapi apa dia punya rasa bersalah kepada gurunya, Sasuke?"
+        )
+
+    def test_duplicate_adalah(self):
+        """'adalah adalah' direduksi menjadi 'adalah'."""
+        self.assertEqual(
+            postprocess_nllb_indonesian("Ini adalah adalah kebenaran."),
+            "Ini adalah kebenaran."
+        )
+
+    def test_empty_string(self):
+        """String kosong dikembalikan apa adanya."""
+        self.assertEqual(postprocess_nllb_indonesian(""), "")
+        self.assertIsNone(postprocess_nllb_indonesian(None))
+
+    def test_no_false_positive_aku(self):
+        """Kalimat yang sudah memakai 'aku' tidak berubah."""
+        original = "Aku sudah tahu itu."
+        self.assertEqual(postprocess_nllb_indonesian(original), original)
+
+    def test_combined_fixes(self):
+        """Kombinasi: nama salah + pronoun formal dalam satu kalimat."""
+        self.assertEqual(
+            postprocess_nllb_indonesian("Saya tahu Bolt sangat kuat."),
+            "Aku tahu Boruto sangat kuat."
+        )
 
 
 if __name__ == "__main__":

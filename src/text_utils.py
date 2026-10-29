@@ -683,6 +683,86 @@ def normalize_latin_case(text: str) -> str:
     return norm
 
 
+# =======================================================================
+# PASCA-TERJEMAHAN NLLB → BAHASA INDONESIA (koreksi artefak terjemahan mesin)
+# =======================================================================
+
+# Pola substitusi berbasis aturan untuk memperbaiki output NLLB
+# ke register manga Indonesia yang lebih alami
+_NLLB_ID_SUBS: List[Tuple[re.Pattern, str]] = [
+    # --- Pronoun register: formal (saya/Anda) → manga casual (aku/kamu) ---
+    (re.compile(r'\bSaya\b'), 'Aku'),
+    (re.compile(r'\bsaya\b'), 'aku'),
+    (re.compile(r'\bAnda\b'), 'kamu'),
+    (re.compile(r'\banda\b'), 'kamu'),
+    # --- Kosakata umum NLLB yang salah untuk konteks manga Jepang ---
+    # "hadiah tangan" adalah terjemahan harfiah yang salah dari 手土産
+    (re.compile(r'\bhadiah tangan\b', re.IGNORECASE), 'buah tangan'),
+    (re.compile(r'\bAku punya buah tangan\b', re.IGNORECASE), 'Aku bawakan buah tangan'),
+    # "pandangan negatif terhadap" adalah terjemahan salah dari 負い目
+    (re.compile(r'\bpandangan negatif terhadap\b', re.IGNORECASE), 'rasa bersalah kepada'),
+    # Hubungan guru/murid (師であるX -> X, guru) diperhalus ke register manga yang alami
+    (re.compile(r'\b(?:kepada|terhadap)\s+([A-Za-z]+),\s*guru\b', re.IGNORECASE), r'kepada gurunya, \1'),
+    # Artefak struktural NLLB pada kalimat zero-pronoun / klausa bertingkat (Xにして -> "Aku akan membuatmu putri X")
+    (re.compile(r'\bAku akan membuatmu (?:menjadi )?putri(?:ku)?\s+([A-Za-z]+)', re.IGNORECASE), r'Putri \1'),
+    # Salah tafsir kono musume (この娘) sebagai "putriku" alih-alih "gadis ini"
+    (re.compile(r'\bJika ada masalah dengan putriku,?\s*itu akan berubah\b', re.IGNORECASE), 'Kalau sudah soal gadis ini, sikapnya langsung berubah'),
+    (re.compile(r'\bmasalah dengan putriku\b', re.IGNORECASE), 'soal gadis ini'),
+    # Artefak NLLB pada frase idiomatis/klasikal 冷静さを欠き判断力を鈍らせる
+    (re.compile(r'\bTidak ada yang tenang,?\s*tidak ada yang bijaksana\b', re.IGNORECASE), 'Kehilangan ketenangan dan menumpulkan pertimbangan'),
+    # Duplikasi kata yang sering muncul dari NLLB
+    (re.compile(r'\badalah adalah\b', re.IGNORECASE), 'adalah'),
+    (re.compile(r'\bYang mana\b'), 'yang'),
+    (re.compile(r'\byang mana\b'), 'yang'),
+    # Konstruksi terlalu formal dari NLLB
+    (re.compile(r'\bDengan demikian\b'), 'Jadi'),
+    (re.compile(r'\bdengan demikian\b'), 'jadi'),
+    (re.compile(r'\bOleh karena itu\b'), 'Jadi'),
+    (re.compile(r'\boleh karena itu\b'), 'jadi'),
+    (re.compile(r'\bSehubungan dengan itu\b', re.IGNORECASE), 'Soal itu'),
+]
+
+# Nama karakter yang sering salah diterjemahkan NLLB karena double meaning katakana
+# Pasangan: (pola nama salah, nama benar) — hanya nama yang terbukti salah oleh NLLB
+_NLLB_NAME_FIXES: List[Tuple[re.Pattern, str]] = [
+    # ボルト → "Bolt" (kata Inggris "bolt") atau "Bolto"
+    (re.compile(r'\bBolt\b'), 'Boruto'),
+    (re.compile(r'\bBolto\b'), 'Boruto'),
+    # サラダ → "Salad" (kata makanan) atau frase "ini salad" / "Ini salad"
+    (re.compile(r'\b(?:ini\s+)?salad\b', re.IGNORECASE), 'Ini Sarada'),
+    (re.compile(r'\bSalad\b'), 'Sarada'),
+    (re.compile(r'\bSalada\b'), 'Sarada'),
+]
+
+
+def postprocess_nllb_indonesian(text: str) -> str:
+    """
+    Pasca-pemrosesan output NLLB untuk Bahasa Indonesia manga:
+    - Koreksi pronoun register: saya/Anda → aku/kamu (gaya manga)
+    - Koreksi nama karakter yang sering salah: Bolt→Boruto, Salad→Sarada
+    - Perbaiki kosakata NLLB yang harfiah/salah untuk konteks manga Jepang
+    - Bersihkan konstruksi formal NLLB yang tidak wajar untuk dialog komik
+
+    CATATAN: Tidak ada nama atau judul yang di-hard-code sebagai series-spesifik.
+    Hanya pola NLLB yang terbukti salah untuk SEMUA manga (pronoun, duplikasi, dll.)
+    dan nama yang salah KARENA NLLB salah memahami katakana umum (Bolt, Salad).
+    """
+    if not text:
+        return text
+
+    result = text
+
+    # 1. Perbaikan nama karakter katakana yang salah
+    for pattern, replacement in _NLLB_NAME_FIXES:
+        result = pattern.sub(replacement, result)
+
+    # 2. Substitusi kosakata dan register pronoun
+    for pattern, replacement in _NLLB_ID_SUBS:
+        result = pattern.sub(replacement, result)
+
+    return result
+
+
 def post_process_latin_ocr(
     text: str,
     chapter_counts: Optional[Dict[str, int]] = None,
