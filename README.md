@@ -39,6 +39,7 @@
 ```bash
 pip install -r requirements.txt
 ```
+*Catatan: Library `fugashi` & `unidic-lite` digunakan untuk analisis morfologis otomatis dalam penemuan nama tokoh. Tanpa `fugashi`, penemuan nama diri otomatis jatuh ke pencocokan pola regex bawaan.*
 
 #### Opsional: Detektor Balon Kata YOLOv8 (Akurasi Tinggi)
 Untuk mengaktifkan model deteksi balon kata terlatih (`ogkalu/comic-speech-bubble-detector-yolov8m`):
