@@ -117,7 +117,17 @@
               <option value="auto">Otomatis (Cerdas + Fallback NLLB-200)</option>
               <option value="nllb" selected>NLLB-200 GPU FP16 (Offline Cepat)</option>
               <option value="llm">LLM Lokal / Ollama (Gaya Santai Alami)</option>
+              <option value="vlm">VLM Vision Model (Konteks Gambar Balon & SFX Dipertahankan)</option>
             </select>
+            <div id="vlm-api-warning" class="hidden p-2.5 rounded-lg border border-amber-900/50 bg-amber-950/20 text-amber-300 text-[11px] space-y-1">
+              <div class="flex items-center space-x-1.5 font-medium text-amber-400">
+                <i data-lucide="shield-alert" class="w-3.5 h-3.5"></i>
+                <span>Peringatan Privasi (Backend API / VLM)</span>
+              </div>
+              <p class="text-zinc-400 leading-relaxed">
+                Backend LLM / VLM API dapat mengirim teks atau gambar crop balon ke luar komputer Anda. Untuk penerjemahan 100% offline tanpa transmisi data keluar, gunakan <strong>NLLB-200 GPU FP16</strong>.
+              </p>
+            </div>
           </div>
 
           <!-- Series & Glossary (Step 3) -->
@@ -379,6 +389,19 @@
       fileInfo.classList.add('hidden');
       btnTranslate.disabled = true;
     });
+
+    const backendSelectEl = document.getElementById('translation-backend-select');
+    const vlmWarningEl = document.getElementById('vlm-api-warning');
+    if (backendSelectEl && vlmWarningEl) {
+      backendSelectEl.addEventListener('change', () => {
+        if (backendSelectEl.value === 'vlm' || backendSelectEl.value === 'llm') {
+          vlmWarningEl.classList.remove('hidden');
+        } else {
+          vlmWarningEl.classList.add('hidden');
+        }
+        lucide.createIcons();
+      });
+    }
 
     function formatBytes(bytes, decimals = 1) {
       if (bytes === 0) return '0 B';

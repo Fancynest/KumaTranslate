@@ -251,6 +251,7 @@ class TranslationEngine:
                 print(f"[GLOSSARY] Info: ekstraksi nama otomatis dilewati: {e}")
 
         ocr_q_list = [b.get("ocr_quality", 1.0) for b in valid_bubbles]
+        crops_list = [b.get("crop") for b in valid_bubbles]
 
         if target_lang in ["ind_Latn", "both"]:
             raw_id, backend_id = self.translator.translate_page_bubbles(
@@ -260,7 +261,9 @@ class TranslationEngine:
                 tgt_lang="ind_Latn",
                 series_hint=series_id,
                 glossary=active_glossary,
-                ocr_qualities=ocr_q_list
+                ocr_qualities=ocr_q_list,
+                bubble_crops=crops_list,
+                page_image=img
             )
             used_backends["ind_Latn"] = backend_id
 
@@ -281,12 +284,14 @@ class TranslationEngine:
         if target_lang in ["eng_Latn", "both"]:
             raw_en, backend_en = self.translator.translate_page_bubbles(
                 texts=raw_texts,
-                backend="nllb" if translation_backend == "nllb" else "auto",
+                backend=translation_backend if translation_backend in ["vlm", "llm", "nllb"] else "auto",
                 src_lang=page_lang,
                 tgt_lang="eng_Latn",
-                series_hint=series_id,
+                series_hint=series_hint if 'series_hint' in locals() else series_id,
                 glossary=active_glossary,
-                ocr_qualities=ocr_q_list
+                ocr_qualities=ocr_q_list,
+                bubble_crops=crops_list,
+                page_image=img
             )
             used_backends["eng_Latn"] = backend_en
 

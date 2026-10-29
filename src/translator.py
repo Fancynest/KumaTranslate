@@ -1,9 +1,12 @@
 import os
 import re
 import json
+import base64
+import io
 import logging
 import requests
 import torch
+from PIL import Image
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 from typing import Optional, List, Dict, Any, Tuple
 from src.text_utils import normalize_ocr_text, apply_glossary_source, split_sentences
@@ -138,6 +141,162 @@ class LLMTranslator:
 
         return results
 
+class VLMTranslator:
+    """
+    Backend terjemahan berbasis Vision-Language Model (VLM).
+    Menerima crop balon kata (dalam urutan baca) beserta gambar halaman utuh sebagai konteks visual.
+    Mengembalikan JSON per nomor balon kata: {"1": "...", "2": "..."}.
+    Instruksi khusus: SFX tidak diterjemahkan dan nama diri dipertahankan.
+    """
+    def __init__(
+        self,
+        api_base: Optional[str] = None,
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        timeout: int = 35
+    ):
+        self.api_base = api_base or os.getenv("VLM_API_BASE", os.getenv("LLM_API_BASE", "http://localhost:11434/v1"))
+        self.model = model or os.getenv("VLM_MODEL", "llava:latest")
+        self.api_key = api_key or os.getenv("VLM_API_KEY", os.getenv("LLM_API_KEY", ""))
+        self.timeout = timeout
+
+    @staticmethod
+    def _image_to_base64_url(img: Image.Image, max_dim: int = 1024) -> str:
+        w, h = img.size
+        if max(w, h) > max_dim:
+            scale = max_dim / float(max(w, h))
+            img = img.resize((int(w * scale), int(h * scale)), Image.Resampling.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=85)
+        b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+        return f"data:image/jpeg;base64,{b64}"
+
+    def translate_bubbles_vision(
+        self,
+        texts: List[str],
+        bubble_crops: List[Image.Image],
+        page_image: Optional[Image.Image] = None,
+        src_lang: str = "jpn_Jpan",
+        tgt_lang: str = "ind_Latn",
+        series_hint: Optional[str] = None,
+        glossary: Optional[Dict[str, str]] = None
+    ) -> List[str]:
+        if not texts or not bubble_crops:
+            return []
+
+        target_name = "Indonesian (Bahasa Indonesia)" if tgt_lang == "ind_Latn" else "English"
+        if src_lang in ["jpn_Jpan", "ja"]:
+            source_name = "Japanese"
+        elif src_lang in ["kor_Hang", "ko"]:
+            source_name = "Korean"
+        elif src_lang in ["zho_Hans", "zh"]:
+            source_name = "Chinese"
+        elif src_lang in ["eng_Latn", "en"]:
+            source_name = "English"
+        else:
+            source_name = "Comic Source Language"
+
+        system_prompt = (
+            f"You are a professional visual manga localization translator and image dialogue analyst specializing in {source_name}-to-{target_name}.\n\n"
+            "CRITICAL VISUAL LOCALIZATION RULES:\n"
+            f"1. Natural Dialogue: Translate dialogue into natural, expressive, conversational {target_name} suitable for manga speech bubbles.\n"
+            "2. Reading Order & Visual Context: Bubbles are ordered sequentially (1 to N) following manga layout. Use the full page image to verify who is speaking, facial expressions, tone, and character dynamics.\n"
+            "3. NO SFX TRANSLATION: Do NOT translate sound effects (SFX, onomatopoeia, visual sounds such as 'グリ', 'ゴゴ', 'ドカン'). Return an empty string \"\" for any SFX crop to preserve original comic artwork.\n"
+            "4. Proper Names & Titles: Do not translate character names literally. Follow established names and the glossary if provided.\n"
+            "5. Invariance: Do not invert negation or tense. Do not change questions into statements.\n"
+            "6. Output Format: Return STRICTLY a single JSON object mapping each bubble number (string) to translated text: {\"1\": \"...\", \"2\": \"...\"}. Do not include markdown codeblocks or commentary."
+        )
+
+        user_content_blocks: List[Dict[str, Any]] = []
+        user_content_blocks.append({
+            "type": "text",
+            "text": f"Series Hint: {series_hint or 'None'}\nGlossary: {json.dumps(glossary or {}, ensure_ascii=False)}\n\nHere is the full page context image:"
+        })
+
+        if page_image is not None:
+            user_content_blocks.append({
+                "type": "image_url",
+                "image_url": {"url": self._image_to_base64_url(page_image, max_dim=1024)}
+            })
+
+        user_content_blocks.append({
+            "type": "text",
+            "text": "Below are the individual speech bubble crops in sequential manga reading order (1 to N). Translate each dialogue bubble into natural target language. Remember: DO NOT translate SFX (return \"\" for SFX)."
+        })
+
+        for i, (txt, crop) in enumerate(zip(texts, bubble_crops)):
+            user_content_blocks.append({
+                "type": "text",
+                "text": f"Bubble #{i+1} (OCR draft: '{txt}'):"
+            })
+            if crop is not None:
+                user_content_blocks.append({
+                    "type": "image_url",
+                    "image_url": {"url": self._image_to_base64_url(crop, max_dim=400)}
+                })
+
+        user_content_blocks.append({
+            "type": "text",
+            "text": f"Return strictly a JSON object mapping bubble numbers to translated dialogue: {{\"1\": \"...\", \"2\": \"...\"}}."
+        })
+
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content_blocks}
+            ],
+            "temperature": 0.2,
+            "response_format": {"type": "json_object"}
+        }
+
+        url = f"{self.api_base}/chat/completions"
+        resp = requests.post(url, json=payload, headers=headers, timeout=self.timeout)
+        resp.raise_for_status()
+        data = resp.json()
+        content = data["choices"][0]["message"]["content"].strip()
+
+        if "```" in content:
+            content = re.sub(r'```(?:json)?', '', content).strip()
+        match = re.search(r'\{.*\}', content, re.DOTALL)
+        if not match:
+            raise ValueError(f"Tidak dapat menemukan JSON pada respons VLM: {content[:100]}...")
+
+        parsed_data = json.loads(match.group(0))
+        results = []
+        for i in range(len(texts)):
+            key_str = str(i + 1)
+            raw_val = None
+            if isinstance(parsed_data, dict):
+                raw_val = (
+                    parsed_data.get(key_str)
+                    or parsed_data.get(i + 1)
+                    or parsed_data.get(f"bubble_{key_str}")
+                    or parsed_data.get(f"bubble_{i + 1}")
+                )
+            elif isinstance(parsed_data, list) and i < len(parsed_data):
+                raw_val = parsed_data[i]
+
+            if isinstance(raw_val, dict):
+                val = (
+                    raw_val.get("translation")
+                    or raw_val.get("indonesian_translation")
+                    or raw_val.get("translated_text")
+                    or raw_val.get("text")
+                    or ""
+                )
+            elif isinstance(raw_val, str):
+                val = raw_val
+            else:
+                val = ""
+            results.append(str(val).strip())
+
+        return results
+
 class MangaTranslator:
     def __init__(
         self,
@@ -178,7 +337,8 @@ class MangaTranslator:
         self.model = AutoModelForSeq2SeqLM.from_pretrained(self.model_name, torch_dtype=dtype).to(self.device)
         self.model.eval()
         self.llm = LLMTranslator()
-        print(f"[TRANSLATOR] Model NLLB-200 FP16 & LLM Backend siap beroperasi.")
+        self.vlm = VLMTranslator()
+        print(f"[TRANSLATOR] Model NLLB-200 FP16, LLM Backend, & VLM Backend siap beroperasi.")
 
     def _clean_translated_text(self, text: str) -> str:
         """
@@ -310,12 +470,15 @@ class MangaTranslator:
         tgt_lang: Optional[str] = None,
         series_hint: Optional[str] = None,
         glossary: Optional[Dict[str, str]] = None,
-        ocr_qualities: Optional[List[float]] = None
+        ocr_qualities: Optional[List[float]] = None,
+        bubble_crops: Optional[List[Any]] = None,
+        page_image: Optional[Any] = None
     ) -> Tuple[List[str], str]:
         """
         Menerjemahkan seluruh balon dalam satu halaman komik.
-        Mendukung backend 'llm' (Ollama/API) dengan reading order dan output JSON terstruktur.
-        Menjadikan LLM sebagai jalur utama untuk balon dengan ocr_quality rendah (< 0.6)
+        Mendukung backend 'llm' (Ollama/API) dan 'vlm' (Vision-Language Model dengan crop visual),
+        dengan reading order dan output JSON terstruktur.
+        Menjadikan LLM/VLM sebagai jalur utama untuk balon dengan ocr_quality rendah (< 0.6)
         atau sumber sangat pendek (<= 3 kata / karakter), serta otomatis fallback ke NLLB-200 offline.
         
         Mengembalikan (daftar_terjemahan, backend_yang_digunakan).
@@ -325,9 +488,30 @@ class MangaTranslator:
 
         chosen_backend = backend.lower() if backend else "auto"
 
-        # Normalisasi teks sebelum proses penerjemahan (baik LLM maupun NLLB)
+        # Normalisasi teks sebelum proses penerjemahan (baik VLM, LLM maupun NLLB)
         normalized_texts = [normalize_ocr_text(t) if t else "" for t in texts]
 
+        # 1. Jalur Backend VLM (Vision-Language Model dengan crop balon & konteks halaman)
+        if chosen_backend == "vlm":
+            try:
+                if bubble_crops and len(bubble_crops) == len(texts):
+                    vlm_res = self.vlm.translate_bubbles_vision(
+                        texts=normalized_texts,
+                        bubble_crops=bubble_crops,
+                        page_image=page_image,
+                        src_lang=src_lang or self.default_src_lang,
+                        tgt_lang=tgt_lang or self.default_tgt_lang,
+                        series_hint=series_hint,
+                        glossary=glossary
+                    )
+                    if vlm_res and len(vlm_res) == len(texts) and any(r.strip() for r in vlm_res):
+                        return vlm_res, "vlm"
+            except Exception as e:
+                warn_msg = f"[VLM FALLBACK] Backend VLM gagal ({type(e).__name__}: {e}). Beralih otomatis ke NLLB-200 offline."
+                print(warn_msg)
+                logger.warning(warn_msg)
+
+        # 2. Jalur Backend LLM (Ollama lokal / OpenAI-compatible API)
         # Periksa apakah ada balon berkualitas rendah atau teks sangat pendek yang membutuhkan inferensi konteks LLM
         has_low_quality = bool(ocr_qualities and any(q < 0.6 for q in ocr_qualities))
         has_short_sources = any(len(t.strip().split()) <= 3 or len(t.strip()) <= 3 for t in texts if t)
