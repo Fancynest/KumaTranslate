@@ -543,6 +543,62 @@ class BubbleDetector:
 
         return clusters
 
+    @staticmethod
+    def _prepare_ocr_crop(
+        img_rgb: np.ndarray,
+        crop_bbox: Tuple[int, int, int, int],
+        bubble_mask: Optional[np.ndarray] = None,
+        font_size: float = 16.0,
+        padding: int = 10,
+        target_font_height: float = 28.0
+    ) -> Image.Image:
+        """
+        Pra-proses crop balon kata sebelum dikirim ke engine OCR:
+        1. Ambil potongan gambar sesuai crop_bbox (safe_bbox).
+        2. Jika bubble_mask tersedia: erode mask 2-3px lalu jadikan putih (255)
+           semua piksel di luar mask untuk membuang outline dan latar artwork.
+        3. Tambahkan padding putih (8-12 px) di sekeliling crop.
+        4. Skalakan agar tinggi huruf optimal sekitar 24-32 px (default target 28 px).
+        """
+        cx, cy, cw, ch = crop_bbox
+        h_orig, w_orig = img_rgb.shape[:2]
+        px, py = max(0, cx), max(0, cy)
+        pw, ph = min(w_orig - px, cw), min(h_orig - py, ch)
+
+        if pw <= 0 or ph <= 0:
+            return Image.new("RGB", (32, 32), color=(255, 255, 255))
+
+        crop = img_rgb[py:py+ph, px:px+pw].copy()
+
+        # 1. Bersihkan piksel di luar balon kata menjadi putih murni
+        if bubble_mask is not None and bubble_mask.shape[:2] == (h_orig, w_orig):
+            mask_slice = bubble_mask[py:py+ph, px:px+pw]
+            kernel_size = max(3, int(font_size * 0.15)) | 1
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_size, kernel_size))
+            eroded_mask = cv2.erode(mask_slice, kernel, iterations=1)
+            crop[eroded_mask == 0] = [255, 255, 255]
+
+        # 2. Tambahkan padding putih 8-12 px di sekeliling crop
+        crop = cv2.copyMakeBorder(
+            crop,
+            padding, padding, padding, padding,
+            borderType=cv2.BORDER_CONSTANT,
+            value=[255, 255, 255]
+        )
+
+        # 3. Skalakan agar tinggi huruf sekitar 24-32 px (bukan upscale mentah ke 736 px)
+        current_font = max(8.0, float(font_size))
+        scale = target_font_height / current_font
+        scale = max(0.6, min(2.5, scale))
+
+        if abs(scale - 1.0) > 0.08:
+            new_w = max(16, int(round(crop.shape[1] * scale)))
+            new_h = max(16, int(round(crop.shape[0] * scale)))
+            interp = cv2.INTER_CUBIC if scale > 1.0 else cv2.INTER_AREA
+            crop = cv2.resize(crop, (new_w, new_h), interpolation=interp)
+
+        return Image.fromarray(crop)
+
     def _detect_heuristic(
         self,
         img_rgb: np.ndarray,
@@ -577,11 +633,15 @@ class BubbleDetector:
             bx, by, bw, bh = text_box
             bubble_mask, safe_bbox = self._compute_bubble_mask(gray, text_box, roi_bbox=None, font_size=median_font_size)
 
-            # Crop seluruh rongga dalam balon kata (safe_bbox) untuk OCR
-            cx, cy, cw, ch = safe_bbox
-            px, py = max(0, cx), max(0, cy)
-            pw, ph = min(w_orig - px, cw), min(h_orig - py, ch)
-            crop_rgb = img_rgb[py:py+ph, px:px+pw]
+            # Crop seluruh rongga dalam balon kata (safe_bbox) untuk OCR dengan pra-proses
+            crop_img = self._prepare_ocr_crop(
+                img_rgb=img_rgb,
+                crop_bbox=safe_bbox,
+                bubble_mask=bubble_mask,
+                font_size=median_font_size,
+                padding=10,
+                target_font_height=28.0
+            )
 
             bubbles.append({
                 "text_bbox": text_box,
@@ -589,7 +649,7 @@ class BubbleDetector:
                 "safe_bbox": safe_bbox,
                 "bubble_mask": bubble_mask,
                 "bbox": safe_bbox,
-                "crop": Image.fromarray(crop_rgb),
+                "crop": crop_img,
                 "area": safe_bbox[2] * safe_bbox[3],
                 "source": "heuristic",
                 "type": "text_bubble"
@@ -727,11 +787,15 @@ class BubbleDetector:
                 font_size=median_font_size
             )
 
-            # Crop seluruh isi rongga balon kata (safe_bbox) untuk OCR
-            cx, cy, cw, ch = safe_bbox
-            px, py = max(0, cx), max(0, cy)
-            pw, ph = min(w_orig - px, cw), min(h_orig - py, ch)
-            crop_rgb = img_rgb[py:py+ph, px:px+pw]
+            # Crop seluruh isi rongga balon kata (safe_bbox) untuk OCR dengan pra-proses
+            crop_img = self._prepare_ocr_crop(
+                img_rgb=img_rgb,
+                crop_bbox=safe_bbox,
+                bubble_mask=bubble_mask,
+                font_size=median_font_size,
+                padding=10,
+                target_font_height=28.0
+            )
 
             bubbles.append({
                 "text_bbox": text_bbox,
@@ -739,7 +803,7 @@ class BubbleDetector:
                 "safe_bbox": safe_bbox,
                 "bubble_mask": bubble_mask,
                 "bbox": safe_bbox,
-                "crop": Image.fromarray(crop_rgb),
+                "crop": crop_img,
                 "area": safe_bbox[2] * safe_bbox[3],
                 "source": "yolo",
                 "type": "text_bubble"
@@ -764,11 +828,15 @@ class BubbleDetector:
                 )
 
                 crop_pad = max(2, int(min(fw, fh) * 0.12))
-                px = max(0, fx - crop_pad)
-                py = max(0, fy - crop_pad)
-                pw = min(w_orig - px, fw + 2 * crop_pad)
-                ph = min(h_orig - py, fh + 2 * crop_pad)
-                crop_rgb = img_rgb[py:py+ph, px:px+pw]
+                crop_box = (max(0, fx - crop_pad), max(0, fy - crop_pad), fw + 2 * crop_pad, fh + 2 * crop_pad)
+                crop_img = self._prepare_ocr_crop(
+                    img_rgb=img_rgb,
+                    crop_bbox=crop_box,
+                    bubble_mask=free_mask,
+                    font_size=median_font_size,
+                    padding=10,
+                    target_font_height=28.0
+                )
 
                 bubbles.append({
                     "text_bbox": fc,
@@ -776,7 +844,7 @@ class BubbleDetector:
                     "safe_bbox": free_safe_bbox,
                     "bubble_mask": free_mask,
                     "bbox": free_safe_bbox,
-                    "crop": Image.fromarray(crop_rgb),
+                    "crop": crop_img,
                     "area": free_safe_bbox[2] * free_safe_bbox[3],
                     "source": "yolo",
                     "type": "free_text"
