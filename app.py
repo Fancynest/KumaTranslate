@@ -4,6 +4,8 @@ import uuid
 import time
 import json
 import shutil
+import string
+import re
 import threading
 from typing import Dict, Any, List, Optional
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
@@ -11,6 +13,8 @@ from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
+
+PUNCT_REGEX = re.compile(r'[\s\d' + re.escape(string.punctuation) + r'、。！？…・～〜「」『』（）()【】[\]―ー\-–—.,:;!?\'"“”‘’]+')
 
 # Setup encoding
 if sys.platform == "win32":
@@ -60,13 +64,15 @@ class TranslationEngine:
         target_lang: str = "ind_Latn",
         doc_lang_hint: Optional[str] = None,
         save_debug: bool = True,
-        debug_dir: str = "debug_output"
+        debug_dir: str = "debug_output",
+        translate_free_text: bool = False
     ) -> Dict[str, Any]:
         """
         Memproses 1 halaman secara BATCH PARALEL Presisi Tinggi:
         - Deteksi balon kata (Normalisasi skala cerdas + Filter banner judul)
+        - Filter sebelum translate (lewati < 2 char, lewati free_text/SFX secara default)
         - OCR dengan Manga-OCR / RapidOCR
-        - Batch translation ke GPU NLLB-200 FP16
+        - Batch translation ke GPU NLLB-200 FP16 dengan guard halusinasi (<= 3 char -> >= 3 kata)
         - Stroke-level inpainting (0% merusak gambar karakter)
         - Strict Fitting Typesetting (100% DIJAMIN teks TIDAK KELUAR dari balon kata)
         - Debug dump JSON per halaman untuk pemisahan diagnosis OCR vs Terjemahan
@@ -103,17 +109,23 @@ class TranslationEngine:
                 "debug_dump": empty_dump
             }
 
-        # 1. OCR teks dari tiap balon kata
+        # 1. OCR teks dan Filter sebelum translate
         raw_texts = []
         valid_bubbles = []
 
         for b in bubbles:
+            # Lewati type=="free_text" secara default (kecuali translate_free_text=True) agar tidak menimpa SFX
+            if not translate_free_text and b.get("type") == "free_text":
+                continue
+
             raw = self.ocr.read_text(b["crop"], lang_hint=doc_lang_hint)
             if raw and raw.strip():
                 t_clean = raw.strip()
-                # Abaikan bercak tanda baca tunggal
-                if len(t_clean) == 1 and t_clean in ".,-~:;!・":
+                # Lewati teks yang setelah dibuang spasi dan tanda baca kurang dari 2 karakter
+                clean_no_punct = PUNCT_REGEX.sub("", t_clean)
+                if len(clean_no_punct) < 2:
                     continue
+
                 raw_texts.append(t_clean)
                 valid_bubbles.append(b)
 
@@ -147,30 +159,57 @@ class TranslationEngine:
         res_en_texts = []
 
         if target_lang in ["ind_Latn", "both"]:
-            res_id_texts = self.translator.translate_batch(raw_texts, src_lang=page_lang, tgt_lang="ind_Latn")
+            raw_id = self.translator.translate_batch(raw_texts, src_lang=page_lang, tgt_lang="ind_Latn")
+            # Guard halusinasi: jika sumber <= 3 karakter dan keluaran >= 3 kata, buang
+            for src, tgt in zip(raw_texts, raw_id):
+                clean_src = PUNCT_REGEX.sub("", src)
+                words = [w for w in tgt.strip().split() if w]
+                if len(clean_src) <= 3 and len(words) >= 3:
+                    print(f"[FILTER] Guard halusinasi membuang: '{src}' ({len(clean_src)}c) -> '{tgt}' ({len(words)}w)")
+                    res_id_texts.append("")
+                else:
+                    res_id_texts.append(tgt)
 
         if target_lang in ["eng_Latn", "both"]:
-            res_en_texts = self.translator.translate_batch(raw_texts, src_lang=page_lang, tgt_lang="eng_Latn")
+            raw_en = self.translator.translate_batch(raw_texts, src_lang=page_lang, tgt_lang="eng_Latn")
+            for src, tgt in zip(raw_texts, raw_en):
+                clean_src = PUNCT_REGEX.sub("", src)
+                words = [w for w in tgt.strip().split() if w]
+                if len(clean_src) <= 3 and len(words) >= 3:
+                    print(f"[FILTER] Guard halusinasi membuang: '{src}' ({len(clean_src)}c) -> '{tgt}' ({len(words)}w)")
+                    res_en_texts.append("")
+                else:
+                    res_en_texts.append(tgt)
 
-        # 4. Inpainting: Hapus teks asli dengan presisi goresan tinta (text_bbox)
-        text_bboxes = [b["text_bbox"] for b in valid_bubbles]
-        bubble_masks = [b.get("bubble_mask") for b in valid_bubbles]
-        cleaned_img = self.inpainter.clean_bubbles(img, text_bboxes, masks=bubble_masks)
+        # 4. Inpainting: Hapus teks asli hanya pada balon yang memiliki terjemahan valid
+        #    Jika terjemahan kosong / dibuang karena halusinasi, gambar asli dipertahankan tanpa ditimpa
+        active_bubbles = []
+        for idx, b in enumerate(valid_bubbles):
+            t_id = res_id_texts[idx] if idx < len(res_id_texts) else ""
+            t_en = res_en_texts[idx] if idx < len(res_en_texts) else ""
+            if (target_lang in ["ind_Latn", "both"] and t_id.strip()) or (target_lang == "eng_Latn" and t_en.strip()):
+                active_bubbles.append((b, t_id, t_en))
+
+        text_bboxes = [ab[0]["text_bbox"] for ab in active_bubbles]
+        bubble_masks = [ab[0].get("bubble_mask") for ab in active_bubbles]
+        cleaned_img = self.inpainter.clean_bubbles(img, text_bboxes, masks=bubble_masks) if active_bubbles else img
 
         # 5. Typesetting: Render teks terjemahan ke dalam safe_bbox (rongga dalam balon kata)
         output_images = {}
         if target_lang in ["ind_Latn", "both"]:
             img_id = cleaned_img.copy()
-            for b, t in zip(valid_bubbles, res_id_texts):
-                render_box = b.get("safe_bbox", b.get("bubble_bbox", b["bbox"]))
-                img_id = self.renderer.render_bubble_text(img_id, render_box, t)
+            for b, t_id, _ in active_bubbles:
+                if t_id.strip():
+                    render_box = b.get("safe_bbox", b.get("bubble_bbox", b["bbox"]))
+                    img_id = self.renderer.render_bubble_text(img_id, render_box, t_id)
             output_images["ind_Latn"] = img_id
 
         if target_lang in ["eng_Latn", "both"]:
             img_en = cleaned_img.copy()
-            for b, t in zip(valid_bubbles, res_en_texts):
-                render_box = b.get("safe_bbox", b.get("bubble_bbox", b["bbox"]))
-                img_en = self.renderer.render_bubble_text(img_en, render_box, t)
+            for b, _, t_en in active_bubbles:
+                if t_en.strip():
+                    render_box = b.get("safe_bbox", b.get("bubble_bbox", b["bbox"]))
+                    img_en = self.renderer.render_bubble_text(img_en, render_box, t_en)
             output_images["eng_Latn"] = img_en
 
         # 6. Susun Debug Dump JSON (bubble_id, bbox, text_bbox, type, source, ocr_text, translation)
@@ -231,7 +270,12 @@ async def serve_index():
     with open(index_path, "r", encoding="utf-8") as f:
         return f.read()
 
-def run_translation_task(task_id: str, uploaded_path: str, target_lang: str):
+def run_translation_task(
+    task_id: str,
+    uploaded_path: str,
+    target_lang: str,
+    translate_free_text: bool = False
+):
     task = TASKS[task_id]
     t0 = time.time()
 
@@ -277,7 +321,8 @@ def run_translation_task(task_id: str, uploaded_path: str, target_lang: str):
                 target_lang=target_lang,
                 doc_lang_hint=document_language_lock,
                 save_debug=True,
-                debug_dir=os.path.join(task_dir, "debug")
+                debug_dir=os.path.join(task_dir, "debug"),
+                translate_free_text=translate_free_text
             )
 
             # Kunci bahasa dokumen dari deteksi pertama
@@ -360,7 +405,8 @@ def run_translation_task(task_id: str, uploaded_path: str, target_lang: str):
 @app.post("/api/translate")
 async def start_translation(
     file: UploadFile = File(...),
-    target_lang: str = Form("ind_Latn")
+    target_lang: str = Form("ind_Latn"),
+    translate_free_text: bool = Form(False)
 ):
     task_id = str(uuid.uuid4())[:8]
     task_dir = os.path.join(TEMP_DIR, task_id)
@@ -383,7 +429,7 @@ async def start_translation(
 
     thread = threading.Thread(
         target=run_translation_task,
-        args=(task_id, uploaded_path, target_lang),
+        args=(task_id, uploaded_path, target_lang, translate_free_text),
         daemon=True
     )
     thread.start()
