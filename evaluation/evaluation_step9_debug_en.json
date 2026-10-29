@@ -1,0 +1,28 @@
+[
+  {
+    "bubble_id": 1,
+    "ocr_text": "YOU KNOW HOW THERE ARE MANY THINGS WE'VE ALL SEEN BUT DON'T KNOW THE NAME OF?",
+    "translation": "Apakah Anda tahu ada banyak hal yang kita semua telah melihat tapi tidak tahu nama dari?",
+    "quality_flags": []
+  },
+  {
+    "bubble_id": 2,
+    "ocr_text": "LIKE THOSE METALLIC MUSHROOM-THINGIES THAT POP UP AT THE HARBOR",
+    "translation": "Seperti benda-benda logam yang muncul di pelabuhan.",
+    "quality_flags": [
+      "possible_truncation"
+    ]
+  },
+  {
+    "bubble_id": 3,
+    "ocr_text": "THEY'RE MOORING POSTS.",
+    "translation": "Mereka adalah pos pendakian.",
+    "quality_flags": []
+  },
+  {
+    "bubble_id": 4,
+    "ocr_text": "I see.",
+    "translation": "Aku mengerti.",
+    "quality_flags": []
+  }
+]

@@ -1,0 +1,26 @@
+[
+  {
+    "bubble_id": 1,
+    "ocr_text": "手土産を持ってきてやったぞ",
+    "translation": "Aku punya hadiah tangan.",
+    "quality_flags": []
+  },
+  {
+    "bubble_id": 2,
+    "ocr_text": "こいつはサラダ… うちはサスケの娘にして",
+    "translation": "Ini Sarada, putri Sasuke.",
+    "quality_flags": []
+  },
+  {
+    "bubble_id": 3,
+    "ocr_text": "あのボルトにとっての最大の弱みだ",
+    "translation": "Itu kelemahan terbesar Boruto.",
+    "quality_flags": []
+  },
+  {
+    "bubble_id": 4,
+    "ocr_text": "大丈夫？",
+    "translation": "Apa kau baik-baik saja?",
+    "quality_flags": []
+  }
+]
