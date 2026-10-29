@@ -156,8 +156,11 @@ class TranslationEngine:
         valid_bubbles = []
 
         for b, raw in raw_candidates:
+            latin_count = len(re.findall(r'[A-Za-z]', raw))
+            cjk_count = len(re.findall(r'[\u3040-\u30ff\u4e00-\u9fff\uac00-\ud7af]', raw))
             is_latin = (
                 doc_lang_hint in ["eng_Latn", "en"] or
+                (latin_count >= 2 and latin_count >= cjk_count * 2) or
                 (not CJK_REGEX.search(raw) and bool(re.search(r'[A-Za-z]{2,}', raw)))
             )
 

@@ -420,7 +420,8 @@ def _ensure_english_dict_loaded() -> None:
         for term, count in SUPPLEMENTAL_VOCAB.items():
             WORD_FREQ[term] = count
 
-    ENGLISH_VOCAB = set(WORD_FREQ.keys())
+    ENGLISH_VOCAB.clear()
+    ENGLISH_VOCAB.update(WORD_FREQ.keys())
     total_count = sum(WORD_FREQ.values()) if WORD_FREQ else 1
     log_total = math.log(total_count)
 
@@ -438,6 +439,23 @@ def _ensure_english_dict_loaded() -> None:
             DELETES_1[d].append(word)
 
     _DICT_LOADED = True
+
+
+def is_english_word(word: str) -> bool:
+    """Memeriksa apakah sebuah kata merupakan kata kamus bahasa Inggris valid."""
+    if not word:
+        return False
+    _ensure_english_dict_loaded()
+    return word.lower() in ENGLISH_VOCAB
+
+
+def count_english_words(text: str) -> int:
+    """Menghitung jumlah token dalam teks yang merupakan kata kamus bahasa Inggris valid."""
+    if not text:
+        return 0
+    _ensure_english_dict_loaded()
+    words = re.findall(r"\b[A-Za-z]+(?:\'[A-Za-z]+)?\b", text)
+    return sum(1 for w in words if w.lower() in ENGLISH_VOCAB)
 
 
 def _damerau_levenshtein(s1: str, s2: str) -> int:
@@ -735,28 +753,43 @@ _NLLB_NAME_FIXES: List[Tuple[re.Pattern, str]] = [
 ]
 
 
-def postprocess_nllb_indonesian(text: str) -> str:
-    """
-    Pasca-pemrosesan output NLLB untuk Bahasa Indonesia manga:
-    - Koreksi pronoun register: saya/Anda → aku/kamu (gaya manga)
-    - Koreksi nama karakter yang sering salah: Bolt→Boruto, Salad→Sarada
-    - Perbaiki kosakata NLLB yang harfiah/salah untuk konteks manga Jepang
-    - Bersihkan konstruksi formal NLLB yang tidak wajar untuk dialog komik
+# Pasangan perbaikan terjemahan khusus bahasa sumber Inggris -> Indonesia
+_NLLB_EN_TO_ID_SUBS: List[Tuple[re.Pattern, str]] = [
+    # "you're early" / "you're early today" yang sering diterjemahkan harfiah "kamu pagi hari ini"
+    (re.compile(r'\b(?:kamu|kau)\s+pagi\s+hari\s+ini\b', re.IGNORECASE), 'kamu datang lebih awal hari ini'),
+    (re.compile(r'\b(?:kamu|kau)\s+adalah\s+awal\s+hari\s+ini\b', re.IGNORECASE), 'kamu datang lebih awal hari ini'),
+    # "country boy" -> "anak negara" (harfiah salah) -> "anak desa" / "anak kampung"
+    (re.compile(r'\banak\s+negara\b', re.IGNORECASE), 'anak desa'),
+    # "getting used to this" -> "mendapatkan digunakan untuk ini" -> "sudah terbiasa dengan ini"
+    (re.compile(r'\bmendapatkan\s+digunakan\s+untuk\s+ini\b', re.IGNORECASE), 'sudah terbiasa dengan ini'),
+]
 
-    CATATAN: Tidak ada nama atau judul yang di-hard-code sebagai series-spesifik.
-    Hanya pola NLLB yang terbukti salah untuk SEMUA manga (pronoun, duplikasi, dll.)
-    dan nama yang salah KARENA NLLB salah memahami katakana umum (Bolt, Salad).
+
+def postprocess_nllb_indonesian(text: str, src_lang: Optional[str] = None) -> str:
+    """
+    Pasca-pemrosesan output NLLB untuk Bahasa Indonesia manga/komik:
+    - Koreksi pronoun register: saya/Anda → aku/kamu (gaya dialog komik santai)
+    - Jika sumber Jepang: koreksi nama karakter katakana yang ambigu (Bolt→Boruto, Salad→Sarada)
+    - Jika sumber Inggris: koreksi frase idiomatis Inggris yang salah diterjemahkan harfiah oleh NLLB
+    - Bersihkan konstruksi formal NLLB yang tidak wajar untuk dialog komik
     """
     if not text:
         return text
 
     result = text
 
-    # 1. Perbaikan nama karakter katakana yang salah
-    for pattern, replacement in _NLLB_NAME_FIXES:
-        result = pattern.sub(replacement, result)
+    # 1. Perbaikan nama karakter katakana yang ambigu HANYA untuk sumber bahasa Jepang
+    # (Jangan ubah kata Inggris 'Bolt' atau makanan 'salad' jika sumbernya komik berbahasa Inggris)
+    if src_lang in [None, "jpn_Jpan", "ja"]:
+        for pattern, replacement in _NLLB_NAME_FIXES:
+            result = pattern.sub(replacement, result)
 
-    # 2. Substitusi kosakata dan register pronoun
+    # 2. Koreksi idiomatis khusus untuk terjemahan dari Bahasa Inggris
+    if src_lang in ["eng_Latn", "en"]:
+        for pattern, replacement in _NLLB_EN_TO_ID_SUBS:
+            result = pattern.sub(replacement, result)
+
+    # 3. Substitusi kosakata dan register pronoun umum (berlaku untuk semua komik)
     for pattern, replacement in _NLLB_ID_SUBS:
         result = pattern.sub(replacement, result)
 

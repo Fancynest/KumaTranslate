@@ -132,20 +132,40 @@ class MultiLingualOCR:
         # AUTO-ROUTING CERDAS:
         # =========================================================
 
-        # 1. Prioritaskan Manga-OCR untuk teks Jepang
-        manga_text = self.manga_ocr(img).strip()
-        # Jika mengandung Hiragana atau Katakana, 100% adalah Bahasa Jepang (Manga)
-        if re.search(r'[\u3040-\u30ff]', manga_text):
-            return manga_text
-
-        # 2. Cek RapidOCR untuk Teks Latin (Inggris) atau Hanzi Mandarin (Manhua)
+        # 1. Cek teks Latin / Inggris dengan RapidOCR terlebih dahulu.
+        # RapidOCR cepat (ONNX), akurat untuk komik Barat/teks Latin, dan tidak berhalusinasi.
         engine_lat = self.rapid_ocr_en or self.rapid_ocr
         rapid_res, _ = engine_lat(img_np)
-        if rapid_res:
-            rapid_text = " ".join([item[1] for item in rapid_res]).strip()
-            # Jika mengandung karakter Hanzi Mandarin atau kata Latin (Inggris)
-            if re.search(r'[\u4e00-\u9fff]', rapid_text) or re.search(r'[a-zA-Z]{2,}', rapid_text):
-                return rapid_text
+        rapid_text = " ".join([item[1] for item in rapid_res]).strip() if rapid_res else ""
+
+        from src.text_utils import count_english_words, calculate_ocr_quality
+        en_words = count_english_words(rapid_text)
+        q = calculate_ocr_quality(rapid_text)
+        has_latin = bool(re.search(r'[a-zA-Z]{2,}', rapid_text))
+
+        # Jika RapidOCR mendeteksi kata-kata kamus bahasa Inggris dengan meyakinkan:
+        # INI JELAS TEKS LATIN / INGGRIS! JANGAN panggil Manga-OCR agar tidak terjadi halusinasi karakter Jepang!
+        if (en_words >= 2 and q >= 0.35) or (en_words >= 1 and q >= 0.5 and len(rapid_text) <= 25 and has_latin):
+            return rapid_text
+
+        # 2. Jika bukan teks Inggris yang jelas, cek Manga-OCR untuk teks Jepang
+        manga_text = self.manga_ocr(img).strip()
+        cjk_chars = len(re.findall(r'[\u3040-\u30ff\u4e00-\u9fff]', manga_text))
+        kana_chars = len(re.findall(r'[\u3040-\u30ff]', manga_text))
+        latin_chars = len(re.findall(r'[a-zA-Z\uFF21-\uFF3A\uFF41-\uFF5A]', manga_text))
+
+        # Hanya terima Manga-OCR jika benar-benar teks Jepang:
+        # Mengandung Kanji, atau minimal 2 karakter Kana, atau proporsi CJK lebih tinggi dari Latin.
+        # Cegah menerima halusinasi Manga-OCR yang berupa deretan huruf Latin dengan 1 stray kana.
+        is_genuine_japanese = (
+            re.search(r'[\u4e00-\u9fff]', manga_text) is not None or
+            kana_chars >= 2 or
+            (kana_chars >= 1 and latin_chars == 0) or
+            (cjk_chars > latin_chars and cjk_chars >= 2)
+        )
+
+        if is_genuine_japanese:
+            return manga_text
 
         # 3. Cek Manhwa Korea (Hangul) dengan EasyOCR
         reader = self._get_korean_ocr()
@@ -154,7 +174,11 @@ class MultiLingualOCR:
         if re.search(r'[\uac00-\ud7af\u1100-\u11ff]', ko_text):
             return ko_text
 
-        # 4. Fallback jika tidak ada trigger khusus
+        # 4. Jika RapidOCR menghasilkan teks non-kosakata (misal nama tokoh unik atau nomor)
+        if rapid_text:
+            return rapid_text
+
+        # 5. Fallback terakhir
         return manga_text or ko_text
 
 if __name__ == "__main__":
