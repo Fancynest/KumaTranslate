@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="id" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Manga Translator</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+  </style>
+</head>
+<body class="bg-zinc-950 text-zinc-100 min-h-screen flex flex-col antialiased selection:bg-zinc-800 selection:text-white">
+
+  <!-- Minimal Header -->
+  <header class="border-b border-zinc-800/80 px-6 h-14 flex items-center justify-between">
+    <div class="flex items-center space-x-2.5">
+      <div class="w-7 h-7 rounded-lg bg-zinc-100 text-zinc-950 flex items-center justify-center font-bold text-xs tracking-tighter">
+        MT
+      </div>
+      <span class="text-sm font-semibold tracking-tight text-zinc-100">Manga Translator</span>
+    </div>
+
+    <div class="flex items-center space-x-4">
+      <div class="flex items-center space-x-2 text-xs text-zinc-500">
+        <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+        <span>Local Engine</span>
+      </div>
+
+      <!-- Tombol Matikan Server -->
+      <button id="btn-shutdown" type="button" title="Matikan Server & Bebaskan Memori GPU" class="px-2.5 py-1 rounded-md bg-zinc-900 hover:bg-red-500/10 text-zinc-400 hover:text-red-400 border border-zinc-800 text-xs font-medium flex items-center space-x-1.5 transition-colors">
+        <i data-lucide="power" class="w-3.5 h-3.5"></i>
+        <span>Matikan</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Workspace Container -->
+  <main class="flex-1 max-w-5xl w-full mx-auto p-6 space-y-6">
+
+    <!-- Upload & Options Grid -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
+      
+      <!-- Drop Area (2 Cols) -->
+      <div class="md:col-span-2">
+        <div id="drop-zone" class="h-64 border border-dashed border-zinc-800 hover:border-zinc-600 rounded-xl bg-zinc-900/40 hover:bg-zinc-900/70 p-6 flex flex-col items-center justify-center cursor-pointer transition-colors relative group">
+          <input type="file" id="file-input" class="hidden" accept=".png,.jpg,.jpeg,.webp,.pdf,.zip,.cbz">
+          
+          <div id="upload-prompt" class="text-center space-y-3">
+            <div class="w-10 h-10 mx-auto rounded-lg bg-zinc-800/80 text-zinc-400 flex items-center justify-center group-hover:text-zinc-200 transition-colors">
+              <i data-lucide="upload" class="w-5 h-5"></i>
+            </div>
+            <div class="space-y-1">
+              <p class="text-sm font-medium text-zinc-200">
+                Pilih atau seret file manga ke sini
+              </p>
+              <p class="text-xs text-zinc-500">
+                PDF, CBZ, ZIP, PNG, JPG, WEBP
+              </p>
+            </div>
+          </div>
+
+          <!-- File Info when Selected -->
+          <div id="file-info" class="hidden text-center space-y-3 w-full px-4">
+            <div class="w-10 h-10 mx-auto rounded-lg bg-zinc-800 text-zinc-200 flex items-center justify-center">
+              <i data-lucide="file" class="w-5 h-5"></i>
+            </div>
+            <div class="space-y-0.5">
+              <p id="file-name" class="font-medium text-zinc-200 text-sm truncate max-w-sm mx-auto"></p>
+              <p id="file-size" class="text-xs text-zinc-500"></p>
+            </div>
+            <button id="btn-change-file" type="button" class="text-xs text-zinc-400 hover:text-zinc-200 underline underline-offset-4">
+              Ganti file
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Settings & Translate Trigger (1 Col) -->
+      <div class="border border-zinc-800 rounded-xl bg-zinc-900/40 p-5 flex flex-col justify-between space-y-5">
+        <div class="space-y-4">
+          <label class="text-xs font-medium text-zinc-400 uppercase tracking-wider">Bahasa Terjemahan</label>
+          
+          <div class="grid grid-cols-1 gap-2">
+            <label class="cursor-pointer">
+              <input type="radio" name="target_lang" value="ind_Latn" class="peer sr-only" checked>
+              <div class="px-3.5 py-2.5 rounded-lg border border-zinc-800 bg-zinc-900/60 peer-checked:border-zinc-400 peer-checked:bg-zinc-800 text-xs font-medium text-zinc-300 peer-checked:text-white flex items-center justify-between transition-all">
+                <span>Bahasa Indonesia</span>
+                <span class="text-[10px] text-zinc-500 uppercase">id</span>
+              </div>
+            </label>
+
+            <label class="cursor-pointer">
+              <input type="radio" name="target_lang" value="eng_Latn" class="peer sr-only">
+              <div class="px-3.5 py-2.5 rounded-lg border border-zinc-800 bg-zinc-900/60 peer-checked:border-zinc-400 peer-checked:bg-zinc-800 text-xs font-medium text-zinc-300 peer-checked:text-white flex items-center justify-between transition-all">
+                <span>English</span>
+                <span class="text-[10px] text-zinc-500 uppercase">en</span>
+              </div>
+            </label>
+
+            <label class="cursor-pointer">
+              <input type="radio" name="target_lang" value="both" class="peer sr-only">
+              <div class="px-3.5 py-2.5 rounded-lg border border-zinc-800 bg-zinc-900/60 peer-checked:border-zinc-400 peer-checked:bg-zinc-800 text-xs font-medium text-zinc-300 peer-checked:text-white flex items-center justify-between transition-all">
+                <span>Keduanya (Dual output)</span>
+                <span class="text-[10px] text-zinc-500 uppercase">id + en</span>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <button id="btn-translate" disabled class="w-full py-2.5 px-4 rounded-lg bg-zinc-100 hover:bg-white text-zinc-950 font-medium text-sm disabled:opacity-40 disabled:cursor-not-allowed transition-all">
+          Terjemahkan
+        </button>
+      </div>
+    </div>
+
+    <!-- Live Progress Bar -->
+    <div id="progress-card" class="hidden border border-zinc-800 rounded-xl bg-zinc-900/60 p-4 space-y-3">
+      <div class="flex items-center justify-between text-xs">
+        <div class="flex items-center space-x-2">
+          <div class="w-3.5 h-3.5 border-2 border-zinc-400 border-t-transparent rounded-full animate-spin"></div>
+          <span id="progress-status" class="font-medium text-zinc-200">Memproses...</span>
+        </div>
+        
+        <div class="flex items-center space-x-3">
+          <span id="progress-percent" class="font-mono text-zinc-400">0%</span>
+          <button id="btn-cancel" class="px-2.5 py-1 rounded-md bg-zinc-800 hover:bg-red-500/10 hover:text-red-400 text-zinc-400 border border-zinc-700/60 text-xs font-medium transition-colors">
+            Batal
+          </button>
+        </div>
+      </div>
+
+      <div class="w-full bg-zinc-800 rounded-full h-1.5 overflow-hidden">
+        <div id="progress-fill" class="bg-zinc-100 h-1.5 rounded-full transition-all duration-300" style="width: 0%"></div>
+      </div>
+    </div>
+
+    <!-- Results Section -->
+    <div id="results-card" class="hidden border border-zinc-800 rounded-xl bg-zinc-900/40 p-5 space-y-5">
+      
+      <!-- Top Action Bar -->
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-zinc-800">
+        <div>
+          <h3 class="text-sm font-semibold text-zinc-100">Hasil Terjemahan Selesai</h3>
+          <p id="result-summary" class="text-xs text-zinc-500"></p>
+        </div>
+
+        <div id="download-actions" class="flex flex-wrap items-center gap-2"></div>
+      </div>
+
+      <!-- Pagination & Image Comparison -->
+      <div class="space-y-3">
+        <div id="pagination-controls" class="hidden items-center justify-between py-1 text-xs">
+          <button id="btn-prev-page" class="px-3 py-1.5 rounded-md border border-zinc-800 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 font-medium flex items-center space-x-1">
+            <i data-lucide="chevron-left" class="w-3.5 h-3.5"></i> <span>Sebelumnya</span>
+          </button>
+          
+          <span id="page-indicator" class="font-mono text-zinc-400">Halaman 1 / 1</span>
+
+          <button id="btn-next-page" class="px-3 py-1.5 rounded-md border border-zinc-800 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 font-medium flex items-center space-x-1">
+            <span>Selanjutnya</span> <i data-lucide="chevron-right" class="w-3.5 h-3.5"></i>
+          </button>
+        </div>
+
+        <!-- Comparison Columns -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div class="space-y-1.5">
+            <span class="text-[11px] font-medium text-zinc-500 uppercase tracking-wider px-1">Original</span>
+            <div class="rounded-lg overflow-hidden border border-zinc-800 bg-zinc-950 min-h-[380px] flex items-center justify-center p-2">
+              <img id="img-original" src="" alt="Asli" class="max-w-full max-h-[650px] object-contain rounded">
+            </div>
+          </div>
+
+          <div class="space-y-1.5">
+            <span class="text-[11px] font-medium text-zinc-400 uppercase tracking-wider px-1">Translated</span>
+            <div class="rounded-lg overflow-hidden border border-zinc-800 bg-zinc-950 min-h-[380px] flex items-center justify-center p-2">
+              <img id="img-translated" src="" alt="Terjemahan" class="max-w-full max-h-[650px] object-contain rounded">
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Shutdown Overlay Modal -->
+    <div id="shutdown-overlay" class="hidden fixed inset-0 z-50 bg-zinc-950/90 backdrop-blur-sm flex items-center justify-center p-4">
+      <div class="max-w-sm w-full border border-zinc-800 rounded-xl bg-zinc-900 p-6 text-center space-y-3 shadow-2xl">
+        <div class="w-10 h-10 mx-auto rounded-full bg-zinc-800 text-zinc-400 flex items-center justify-center">
+          <i data-lucide="power" class="w-5 h-5"></i>
+        </div>
+        <div class="space-y-1">
+          <h3 class="text-sm font-semibold text-zinc-100">Server Telah Dimatikan</h3>
+          <p class="text-xs text-zinc-400">
+            Proses Python telah ditutup dan memori GPU (VRAM) telah dibebaskan sepenuhnya. Kamu bisa menutup tab ini.
+          </p>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <script>
+    lucide.createIcons();
+
+    let selectedFile = null;
+    let currentTaskId = null;
+    let pollInterval = null;
+    let currentPageIndex = 0;
+    let originalPages = [];
+    let translatedPages = [];
+
+    const dropZone = document.getElementById('drop-zone');
+    const fileInput = document.getElementById('file-input');
+    const uploadPrompt = document.getElementById('upload-prompt');
+    const fileInfo = document.getElementById('file-info');
+    const fileName = document.getElementById('file-name');
+    const fileSize = document.getElementById('file-size');
+    const btnChangeFile = document.getElementById('btn-change-file');
+    const btnTranslate = document.getElementById('btn-translate');
+    const btnCancel = document.getElementById('btn-cancel');
+    const btnShutdown = document.getElementById('btn-shutdown');
+    const shutdownOverlay = document.getElementById('shutdown-overlay');
+
+    const progressCard = document.getElementById('progress-card');
+    const progressStatus = document.getElementById('progress-status');
+    const progressPercent = document.getElementById('progress-percent');
+    const progressFill = document.getElementById('progress-fill');
+
+    const resultsCard = document.getElementById('results-card');
+    const resultSummary = document.getElementById('result-summary');
+    const downloadActions = document.getElementById('download-actions');
+    const paginationControls = document.getElementById('pagination-controls');
+    const pageIndicator = document.getElementById('page-indicator');
+    const btnPrevPage = document.getElementById('btn-prev-page');
+    const btnNextPage = document.getElementById('btn-next-page');
+    const imgOriginal = document.getElementById('img-original');
+    const imgTranslated = document.getElementById('img-translated');
+
+    dropZone.addEventListener('click', () => fileInput.click());
+    dropZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropZone.classList.add('border-zinc-500', 'bg-zinc-900/80');
+    });
+    dropZone.addEventListener('dragleave', () => {
+      dropZone.classList.remove('border-zinc-500', 'bg-zinc-900/80');
+    });
+    dropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropZone.classList.remove('border-zinc-500', 'bg-zinc-900/80');
+      if (e.dataTransfer.files.length > 0) {
+        handleFileSelect(e.dataTransfer.files[0]);
+      }
+    });
+
+    fileInput.addEventListener('change', () => {
+      if (fileInput.files.length > 0) {
+        handleFileSelect(fileInput.files[0]);
+      }
+    });
+
+    btnChangeFile.addEventListener('click', (e) => {
+      e.stopPropagation();
+      selectedFile = null;
+      fileInput.value = '';
+      uploadPrompt.classList.remove('hidden');
+      fileInfo.classList.add('hidden');
+      btnTranslate.disabled = true;
+    });
+
+    function formatBytes(bytes, decimals = 1) {
+      if (bytes === 0) return '0 B';
+      const k = 1024;
+      const dm = decimals < 0 ? 0 : decimals;
+      const sizes = ['B', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+    }
+
+    function handleFileSelect(file) {
+      selectedFile = file;
+      fileName.textContent = file.name;
+      fileSize.textContent = formatBytes(file.size);
+      uploadPrompt.classList.add('hidden');
+      fileInfo.classList.remove('hidden');
+      btnTranslate.disabled = false;
+      resultsCard.classList.add('hidden');
+      lucide.createIcons();
+    }
+
+    btnCancel.addEventListener('click', async () => {
+      if (!currentTaskId) return;
+      btnCancel.disabled = true;
+      progressStatus.textContent = 'Membatalkan...';
+      try {
+        await fetch(`/api/cancel/${currentTaskId}`, { method: 'POST' });
+      } catch (err) {
+        console.error(err);
+      }
+    });
+
+    btnShutdown.addEventListener('click', async () => {
+      if (!confirm('Matikan server Manga Translator dan kosongkan memori GPU?')) return;
+      btnShutdown.disabled = true;
+      try {
+        await fetch('/api/shutdown', { method: 'POST' });
+      } catch (e) {
+        // Expected on server shutdown
+      }
+      shutdownOverlay.classList.remove('hidden');
+      lucide.createIcons();
+    });
+
+    btnTranslate.addEventListener('click', async () => {
+      if (!selectedFile) return;
+
+      const targetLang = document.querySelector('input[name="target_lang"]:checked').value;
+      const formData = new FormData();
+      formData.append('file', selectedFile);
+      formData.append('target_lang', targetLang);
+
+      btnTranslate.disabled = true;
+      btnCancel.disabled = false;
+      progressCard.classList.remove('hidden');
+      resultsCard.classList.add('hidden');
+
+      progressStatus.textContent = 'Mempersiapkan dokumen...';
+      progressPercent.textContent = '5%';
+      progressFill.style.width = '5%';
+
+      try {
+        const response = await fetch('/api/translate', {
+          method: 'POST',
+          body: formData
+        });
+
+        if (!response.ok) throw new Error('Gagal memulai proses.');
+        const data = await response.json();
+        currentTaskId = data.task_id;
+        pollProgress(currentTaskId);
+      } catch (err) {
+        alert('Kesalahan: ' + err.message);
+        btnTranslate.disabled = false;
+        progressCard.classList.add('hidden');
+      }
+    });
+
+    function pollProgress(taskId) {
+      if (pollInterval) clearInterval(pollInterval);
+
+      pollInterval = setInterval(async () => {
+        try {
+          const res = await fetch(`/api/progress/${taskId}`);
+          const data = await res.json();
+
+          progressStatus.textContent = data.status_message;
+          progressPercent.textContent = `${data.percent}%`;
+          progressFill.style.width = `${data.percent}%`;
+
+          if (data.is_cancelled) {
+            clearInterval(pollInterval);
+            progressStatus.textContent = 'Dibatalkan.';
+            setTimeout(() => {
+              progressCard.classList.add('hidden');
+              btnTranslate.disabled = false;
+              btnCancel.disabled = false;
+            }, 800);
+          } else if (data.is_completed) {
+            clearInterval(pollInterval);
+            progressCard.classList.add('hidden');
+            btnTranslate.disabled = false;
+            showResults(data.result);
+          } else if (data.is_error) {
+            clearInterval(pollInterval);
+            alert('Error: ' + data.error_message);
+            progressCard.classList.add('hidden');
+            btnTranslate.disabled = false;
+          }
+        } catch (e) {
+          console.error(e);
+        }
+      }, 700);
+    }
+
+    function showResults(result) {
+      resultsCard.classList.remove('hidden');
+      resultSummary.textContent = `${result.total_pages} halaman selesai (${result.duration_seconds}s)`;
+
+      downloadActions.innerHTML = '';
+      result.downloads.forEach(dl => {
+        const a = document.createElement('a');
+        a.href = dl.url;
+        a.download = dl.filename;
+        a.className = 'px-3.5 py-1.5 rounded-lg bg-zinc-100 hover:bg-white text-zinc-950 font-medium text-xs flex items-center space-x-1.5 transition-colors';
+        a.innerHTML = `<i data-lucide="download" class="w-3.5 h-3.5"></i> <span>Unduh ${dl.label}</span>`;
+        downloadActions.appendChild(a);
+      });
+
+      originalPages = result.original_pages;
+      translatedPages = result.translated_pages;
+      currentPageIndex = 0;
+
+      if (originalPages.length > 1) {
+        paginationControls.classList.remove('hidden');
+        paginationControls.classList.add('flex');
+      } else {
+        paginationControls.classList.add('hidden');
+        paginationControls.classList.remove('flex');
+      }
+
+      updatePageViewer();
+      lucide.createIcons();
+      resultsCard.scrollIntoView({ behavior: 'smooth' });
+    }
+
+    function updatePageViewer() {
+      if (originalPages.length === 0) return;
+      pageIndicator.textContent = `${currentPageIndex + 1} / ${originalPages.length}`;
+      imgOriginal.src = originalPages[currentPageIndex];
+      imgTranslated.src = translatedPages[currentPageIndex];
+
+      btnPrevPage.disabled = (currentPageIndex === 0);
+      btnNextPage.disabled = (currentPageIndex === originalPages.length - 1);
+      btnPrevPage.style.opacity = (currentPageIndex === 0) ? '0.4' : '1';
+      btnNextPage.style.opacity = (currentPageIndex === originalPages.length - 1) ? '0.4' : '1';
+    }
+
+    btnPrevPage.addEventListener('click', () => {
+      if (currentPageIndex > 0) {
+        currentPageIndex--;
+        updatePageViewer();
+      }
+    });
+
+    btnNextPage.addEventListener('click', () => {
+      if (currentPageIndex < originalPages.length - 1) {
+        currentPageIndex++;
+        updatePageViewer();
+      }
+    });
+  </script>
+</body>
+</html>
