@@ -38,24 +38,30 @@ class LLMTranslator:
         if not texts:
             return []
 
+        target_name = "Indonesian (Bahasa Indonesia)" if tgt_lang == "ind_Latn" else "English"
+        source_name = "Japanese" if src_lang == "jpn_Jpan" else ("Korean" if src_lang == "kor_Hang" else "Chinese")
+
         prompt_lines = [f"{i+1}: {t}" for i, t in enumerate(texts)]
         system_prompt = (
-            "You are an expert manga/comic localizer translating dialogue into natural, casual Indonesian.\n"
-            "Style Guide:\n"
-            "1. Casual and natural Indonesian (Bahasa Indonesia santai, luwes, dan tidak kaku).\n"
-            "2. Keep sentences concise and punchy so they strictly fit inside comic speech bubbles.\n"
-            "3. Consistent pronoun styles and character address throughout the scene.\n"
-            "4. NEVER translate proper character names or series titles. Strictly follow the glossary if provided.\n"
-            "5. NEVER translate SFX (sound effects).\n"
-            "6. Output format: strictly a single JSON object mapping each number (string) to its translation string. "
-            "Example: {\"1\": \"...\", \"2\": \"...\"}. Do not write explanations or markdown outside the JSON."
+            f"You are a professional {source_name}-to-{target_name} manga localization translator and visual dialogue analyst.\n\n"
+            "CORE LOCALIZATION PRINCIPLES:\n"
+            f"1. Natural Dialogue: Produce fluent, natural, and expressive {target_name} dialogue suitable for manga characters (santai, luwes, hidup, tidak kaku seperti terjemahan mesin harfiah).\n"
+            "2. Scene & Context Awareness: Speech bubbles are arranged in manga reading order. Read connected bubbles and the entire page as one continuous scene. Resolve omitted Japanese/Korean subjects and objects (zero pronouns) using scene context and character dynamics without inventing facts.\n"
+            "3. Emotion, Tone & Intent: Faithfully preserve character voice, emotion, sarcasm, threats, humor, suspense, politeness, and dramatic emphasis.\n"
+            "4. Bubble Space Efficiency: Keep dialogue concise and punchy so it fits comfortably inside comic speech bubbles without text overflow.\n"
+            "5. Proper Names & Glossary: NEVER translate proper character names or series titles into literal common nouns (e.g. do not translate names into foods, objects, or common words). Strictly follow romanized names and the glossary if provided.\n"
+            "6. SFX & Artwork: Do not translate sound effects (SFX) or onomatopoeia artwork; keep them as original or leave unchanged.\n"
+            "7. Strict Accuracy & Invariance: Do not invert negation, tense, or intent. Do not change statements into questions. Do not alter who performs an action. Do not invent explanations or facts absent from the original dialogue.\n\n"
+            "OUTPUT FORMAT:\n"
+            'Return STRICTLY a single JSON object mapping each bubble number (string) to its localized translation string. '
+            'Example: {"1": "...", "2": "..."}. Do not include explanations, thinking tags, or markdown outside the JSON.'
         )
 
         user_content = f"Series Title Hint: {series_hint or 'None'}\n"
         if glossary:
             user_content += f"Glossary (Source -> Target): {json.dumps(glossary, ensure_ascii=False)}\n"
         user_content += "\nSpeech bubbles in reading order:\n" + "\n".join(prompt_lines)
-        user_content += '\n\nTranslate each numbered bubble into natural Indonesian. Return strictly a JSON object {"1": "...", "2": "..."}.'
+        user_content += f'\n\nTranslate each numbered bubble into natural {target_name}. Return strictly a JSON object {{"1": "...", "2": "..."}}.'
 
         headers = {"Content-Type": "application/json"}
         if self.api_key:
@@ -84,11 +90,40 @@ class LLMTranslator:
         if not match:
             raise ValueError(f"Tidak dapat menemukan JSON pada respons LLM: {content[:100]}...")
 
-        parsed = json.loads(match.group(0))
+        parsed_data = json.loads(match.group(0))
         results = []
         for i in range(len(texts)):
-            key = str(i + 1)
-            results.append(parsed.get(key, "").strip())
+            key_str = str(i + 1)
+            raw_val = None
+            if isinstance(parsed_data, dict):
+                raw_val = (
+                    parsed_data.get(key_str) 
+                    or parsed_data.get(i + 1) 
+                    or parsed_data.get(f"bubble_{key_str}") 
+                    or parsed_data.get(f"bubble_{i + 1}")
+                )
+                if raw_val is None and "translations" in parsed_data:
+                    sub = parsed_data["translations"]
+                    if isinstance(sub, list) and i < len(sub):
+                        raw_val = sub[i]
+                    elif isinstance(sub, dict):
+                        raw_val = sub.get(key_str) or sub.get(f"bubble_{key_str}")
+            elif isinstance(parsed_data, list) and i < len(parsed_data):
+                raw_val = parsed_data[i]
+
+            if isinstance(raw_val, dict):
+                val = (
+                    raw_val.get("indonesian_translation")
+                    or raw_val.get("translation")
+                    or raw_val.get("translated_text")
+                    or raw_val.get("text")
+                    or ""
+                )
+            elif isinstance(raw_val, str):
+                val = raw_val
+            else:
+                val = ""
+            results.append(str(val).strip())
 
         return results
 
@@ -262,8 +297,8 @@ class MangaTranslator:
 
         if chosen_backend in ["llm", "auto"]:
             try:
-                # LLM saat ini terutama optimal untuk output target Bahasa Indonesia
-                if (tgt_lang or self.default_tgt_lang) == "ind_Latn":
+                # LLM mendukung terjemahan ke Bahasa Indonesia maupun English
+                if (tgt_lang or self.default_tgt_lang) in ["ind_Latn", "eng_Latn"]:
                     results = self.llm.translate_bubbles(
                         texts=texts,
                         src_lang=src_lang or self.default_src_lang,
