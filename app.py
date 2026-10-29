@@ -175,8 +175,8 @@ class TranslationEngine:
         if translation_memory:
             active_glossary.update(translation_memory.glossary)
 
-        # Ekstraksi otomatis kandidat nama diri & istilah Katakana agar tidak diterjemahkan harafiah
-        if page_lang == "jpn_Jpan":
+        # Ekstraksi otomatis kandidat nama diri & istilah Katakana/Hangul agar tidak diterjemahkan harafiah
+        if page_lang in ["jpn_Jpan", "kor_Hang"]:
             try:
                 extracted_names = self.name_extractor.extract_candidates([raw_texts])
                 for cand in extracted_names:

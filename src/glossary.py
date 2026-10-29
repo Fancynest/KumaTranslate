@@ -23,7 +23,7 @@ ZH_HONORIFIC_SUFFIXES = [
 
 ALL_HONORIFICS = JP_HONORIFIC_SUFFIXES + KR_HONORIFIC_SUFFIXES + ZH_HONORIFIC_SUFFIXES
 HONORIFIC_PATTERN = re.compile(
-    r'([^\s\d、。！？…・「」『』（）()]+?)(?:' + '|'.join(re.escape(h) for h in ALL_HONORIFICS) + r')(?=[\s、。！？…・「」『』（）()]|$)'
+    r'([^\s\d、。！？…・「」『』（）()．，]+?)\s*(?:' + '|'.join(re.escape(h) for h in ALL_HONORIFICS) + r')(?=[\s、。！？…・「」『』（）()．，!?,.]|$)'
 )
 
 # Pola pengenalan / panggilan tokoh (misal: "こいつは サラダ", "あいつは ボルト", "名前は...")
@@ -32,25 +32,86 @@ INTRO_PATTERN = re.compile(
 )
 
 JP_PARTICLES = re.compile(r'^[はがをにへでとからもやの]+')
+JP_COPULAS = re.compile(r'(?:だ|です|である|という|って|の|に|を|は|が|と|も)+$')
+
+# Tabel Revised Romanization of Korean (RR) tanpa dependensi eksternal
+_KR_CHOSUNG = ['g', 'kk', 'n', 'd', 'tt', 'r', 'm', 'b', 'pp', 's', 'ss', '', 'j', 'jj', 'ch', 'k', 't', 'p', 'h']
+_KR_JUNGSUNG = ['a', 'ae', 'ya', 'yae', 'eo', 'e', 'yeo', 'ye', 'o', 'wa', 'wae', 'oe', 'yo', 'u', 'wo', 'we', 'wi', 'yu', 'eu', 'ui', 'i']
+_KR_JONGSUNG = ['', 'k', 'k', 'ks', 'n', 'nj', 'nh', 't', 'l', 'lg', 'lm', 'lb', 'ls', 'lt', 'lp', 'lh', 'm', 'p', 'ps', 't', 't', 'ng', 't', 't', 'k', 't', 'p', 'h']
+
+def romanize_korean_name(text: str) -> str:
+    """
+    Mengonversi nama Hangul Korea ke Romanisasi Standar (Revised Romanization of Korean).
+    Contoh: 진우 -> Jinu, 수호 -> Suho, 도현 -> Dohyeon, 민우 -> Minu
+    """
+    if not text:
+        return ""
+    result = []
+    for char in text:
+        code = ord(char)
+        if 0xAC00 <= code <= 0xD7A3:
+            s_index = code - 0xAC00
+            cho = s_index // 588
+            jung = (s_index % 588) // 28
+            jong = s_index % 28
+            syllable = _KR_CHOSUNG[cho] + _KR_JUNGSUNG[jung] + _KR_JONGSUNG[jong]
+            result.append(syllable)
+        else:
+            result.append(char)
+    return "".join(result).capitalize()
 
 def romanize_japanese_name(text: str) -> str:
     """
-    Mengonversi nama atau istilah Katakana/Hiragana ke Romaji fonetik standar (Hepburn).
-    Secara generik dan otomatis tanpa perlu hardcode nama tokoh.
-    Contoh: サラダ -> Sarada, ボルト -> Boruto, サスケ -> Sasuke, ヒマワリ -> Himawari
+    Mengonversi nama atau istilah Katakana/Hiragana/Kanji Jepang ke Romaji fonetik standar (Hepburn).
+    Secara generik dan otomatis untuk SEMUA manga/komik tanpa perlu hardcode nama tokoh apa pun.
+    Contoh:
+    - Katakana: サラダ -> Sarada, ボルト -> Boruto, アーニャ -> Anya, ルフィ -> Rufi, ゾロ -> Zoro
+    - Kanji: 五条 -> Gojou, 日向 -> Hinata, 竈門 -> Kamado
     """
     if not text:
         return ""
     try:
         import jaconv
-        hira = jaconv.kata2hira(text)
+
+        # Jika mengandung karakter Kanji, ambil bacaan fonetiknya via Fugashi jika tersedia
+        phonetic_text = text
+        if re.search(r'[\u4e00-\u9fff]', text):
+            try:
+                import fugashi
+                _tagger = fugashi.Tagger()
+                readings = []
+                for w in _tagger(text):
+                    feat = w.feature
+                    kana = getattr(feat, 'kana', '') or getattr(feat, 'pron', '') or w.surface
+                    readings.append(kana)
+                if readings:
+                    phonetic_text = "".join(readings)
+            except Exception:
+                phonetic_text = text
+
+        hira = jaconv.kata2hira(phonetic_text)
         rom = jaconv.kana2alphabet(hira)
-        # Tangani konsonan ganda sokuon (xtsu)
+
+        # 1. Tangani konsonan ganda sokuon (xtsu) -> duplikasi konsonan berikutnya
         rom = re.sub(r'xtsu([ksthmyrwgzdbpj])', r'\1\1', rom)
         rom = re.sub(r'xtsu', '', rom)
+
+        # 2. Tangani tanda vokal panjang (ー / hyphen) agar natural (misal A-nya -> Anya, Choppa- -> Choppa)
+        rom = re.sub(r'([aeiouAEIOU])-+', r'\1', rom)
+        rom = rom.replace('-', '')
+        rom = re.sub(r'[\^~_]', '', rom)
+
         return rom.capitalize()
     except Exception:
         return text
+
+def romanize_proper_name(text: str, lang: str = "jpn_Jpan") -> str:
+    """
+    Fungsi romanisasi nama generik multi-bahasa (Jepang & Korea).
+    """
+    if lang == "kor_Hang" or re.search(r'[\uac00-\ud7a3]', text):
+        return romanize_korean_name(text)
+    return romanize_japanese_name(text)
 
 class GlossaryManager:
     """
@@ -172,7 +233,7 @@ class NameCandidateExtractor:
                                         "score": 0.0,
                                         "reasons": set(),
                                         "pages": set(),
-                                        "suggested": romanize_japanese_name(surface)
+                                        "suggested": romanize_proper_name(surface)
                                     }
                                 candidates[surface]["score"] += 3.5
                                 candidates[surface]["reasons"].add("proper_noun")
@@ -200,7 +261,7 @@ class NameCandidateExtractor:
                                 "score": 0.0,
                                 "reasons": set(),
                                 "pages": set(),
-                                "suggested": romanize_japanese_name(name_tok)
+                                "suggested": romanize_proper_name(name_tok)
                             }
                         candidates[name_tok]["score"] += 4.0
                         candidates[name_tok]["reasons"].add("before_honorific")
@@ -210,6 +271,17 @@ class NameCandidateExtractor:
                 for match in INTRO_PATTERN.finditer(text):
                     intro_tok = match.group(1).strip()
                     intro_tok = JP_PARTICLES.sub('', intro_tok)
+                    intro_tok = JP_COPULAS.sub('', intro_tok)
+                    if tagger is not None and intro_tok:
+                        try:
+                            nouns = [w.surface for w in tagger(intro_tok) if getattr(w.feature, 'pos1', '') == '名詞']
+                            if nouns:
+                                intro_tok = nouns[0]
+                            else:
+                                # Jika bukan kata benda (misal kata kerja "下がってろ"), lewati
+                                continue
+                        except Exception:
+                            pass
                     if 2 <= len(intro_tok) <= 8:
                         if intro_tok not in candidates:
                             candidates[intro_tok] = {
@@ -217,7 +289,7 @@ class NameCandidateExtractor:
                                 "score": 0.0,
                                 "reasons": set(),
                                 "pages": set(),
-                                "suggested": romanize_japanese_name(intro_tok)
+                                "suggested": romanize_proper_name(intro_tok)
                             }
                         candidates[intro_tok]["score"] += 4.5
                         candidates[intro_tok]["reasons"].add("introduced_character")
@@ -232,7 +304,7 @@ class NameCandidateExtractor:
                                 "score": 0.0,
                                 "reasons": set(),
                                 "pages": set(),
-                                "suggested": romanize_japanese_name(kata)
+                                "suggested": romanize_proper_name(kata)
                             }
                         candidates[kata]["score"] += 2.0
                         candidates[kata]["reasons"].add("katakana")
