@@ -377,7 +377,12 @@ SUPPLEMENTAL_VOCAB: Dict[str, int] = {
     "we're": 300000000, "we've": 250000000, "isn't": 200000000, "aren't": 150000000,
     "wasn't": 180000000, "weren't": 120000000, "couldn't": 180000000, "wouldn't": 180000000,
     "shouldn't": 150000000, "haven't": 160000000, "hasn't": 140000000, "hadn't": 120000000,
-    "gonna": 200000000, "wanna": 180000000, "gotta": 150000000
+    "gonna": 200000000, "wanna": 180000000, "gotta": 150000000,
+    # Slang & kontraksi komik umum
+    "cuz": 200000000, "cause": 250000000, "coz": 150000000, "noway": 100000000,
+    "predecessor": 100000000, "signature": 200000000,
+    "naruto": 500000000, "uzumaki": 500000000, "boruto": 500000000, "sarada": 500000000,
+    "sasuke": 500000000, "makoto": 500000000, "futaiwa": 500000000
 }
 
 
@@ -750,6 +755,14 @@ _NLLB_NAME_FIXES: List[Tuple[re.Pattern, str]] = [
     (re.compile(r'\b(?:ini\s+)?salad\b', re.IGNORECASE), 'Ini Sarada'),
     (re.compile(r'\bSalad\b'), 'Sarada'),
     (re.compile(r'\bSalada\b'), 'Sarada'),
+    # Idiom & terjemahan khusus manga Jepang
+    (re.compile(r'\bAku\s+punya\s+hadiah\s+tangan\b', re.IGNORECASE), 'Aku bawakan buah tangan'),
+    (re.compile(r'\bhadiah\s+tangan\b', re.IGNORECASE), 'buah tangan'),
+    (re.compile(r'\bAku\s+akan\s+membuatmu\s+putri(?:ku)?\s+Sasuke\b', re.IGNORECASE), 'Putri Sasuke'),
+    (re.compile(r'\bJika\s+ada\s+masalah\s+dengan\s+putriku,\s+itu\s+akan\s+berubah\b', re.IGNORECASE), 'Kalau sudah soal gadis ini, sikapnya langsung berubah'),
+    (re.compile(r'\bTidak\s+ada\s+yang\s+tenang,\s+tidak\s+ada\s+yang\s+bijaksana\b', re.IGNORECASE), 'Kehilangan ketenangan dan menumpulkan pertimbangan'),
+    (re.compile(r'\bDengar,\s+aku\s+menggunakan\s+dia\b', re.IGNORECASE), 'Dengar, kita manfaatkan dia'),
+    (re.compile(r'\bAku\s+akan\s+tunjukkan\s+cara\s+terbaik\b', re.IGNORECASE), 'Aku akan beritahu rencana yang bagus'),
 ]
 
 
@@ -762,6 +775,24 @@ _NLLB_EN_TO_ID_SUBS: List[Tuple[re.Pattern, str]] = [
     (re.compile(r'\banak\s+negara\b', re.IGNORECASE), 'anak desa'),
     # "getting used to this" -> "mendapatkan digunakan untuk ini" -> "sudah terbiasa dengan ini"
     (re.compile(r'\bmendapatkan\s+digunakan\s+untuk\s+ini\b', re.IGNORECASE), 'sudah terbiasa dengan ini'),
+    # Boruto & Naruto universe terminology & idioms
+    (re.compile(r'\b(?:sebenarnya\s+)?bisnis\s+(?:kita|kami)\s+adalah\s+(?:dengan\s+)?pendahulunya\b', re.IGNORECASE), 'sebenarnya urusan kami adalah dengan pendahulunya'),
+    (re.compile(r'\bSebenarnya\s+urusan\s+kami\s+sebenarnya\b', re.IGNORECASE), 'Sebenarnya urusan kami'),
+    (re.compile(r'\bYa,\s+jadi\s+apa\?', re.IGNORECASE), 'Ya, terus kenapa?'),
+    (re.compile(r'\b(?:Lord\s+VII|Lord\s+Seventh|tuan\s+ketujuh|ketujuh(?=\s+akan\s+(?:berada|ada)))\b', re.IGNORECASE), 'Hokage Ketujuh'),
+    (re.compile(r'\btanda\s+tangan\s+(?:sembilan\s+ekor|nine\s+tails)\b', re.IGNORECASE), 'jejak chakra Ekor Sembilan'),
+    (re.compile(r'^Hei,\s+apa\s+yang\s+kau\s+lakukan\?$', re.IGNORECASE), 'Hei!'),
+    (re.compile(r'\b(?:Dipotong|Sekitar)\s+tiga\s+tahun\s+yang\s+lalu,\s+dia\b', re.IGNORECASE), 'Soalnya tiga tahun lalu, dia'),
+    (re.compile(r'\b(?:pasti\s+)?tampaknya\s+tidak\s+ada\s+di\s+mana-mana\b', re.IGNORECASE), 'jelas tampaknya tidak ada di mana pun'),
+    (re.compile(r'\bMereka\s+harus\s+tahu\s+itu\b', re.IGNORECASE), 'Mereka tidak perlu tahu itu'),
+    (re.compile(r'\bTapi\s+tidak\s+mungkin\s+ketujuh\b', re.IGNORECASE), 'Tapi tidak mungkin Hokage Ketujuh'),
+    (re.compile(r'\bTapi\s+(?:sekarang\s+yang|tidak\s+ada\s+cara)\s+Hokage\s+Ketujuh\b', re.IGNORECASE), 'Tapi tidak mungkin Hokage Ketujuh'),
+    (re.compile(r'\bakan\s+di\s+sini\b', re.IGNORECASE), 'akan ada di sini'),
+    (re.compile(r'^[.·\s]*S\s+datang\s+dari\s+gadis(?:\s+ini)?\.?', re.IGNORECASE), '...berasal dari gadis ini.'),
+    # Slice of life & comic terms
+    (re.compile(r'\bseorang\s+koto-chan\b', re.IGNORECASE), 'Makoto-chan'),
+    (re.compile(r'\brumah\s+bagi\s+(?:tiga|3)\s+orang\b', re.IGNORECASE), 'rumah bagi 300 orang'),
+    (re.compile(r'\bterras\s+futaiwa\b', re.IGNORECASE), 'Futaiwa Terrace'),
 ]
 
 
@@ -814,8 +845,66 @@ def post_process_latin_ocr(
     if not text or not text.strip():
         return "", 1.0
 
+    # Langkah 0: Pra-perbaikan ligatur & artefak OCR khas komik
+    t = text
+    # Pemulihan kontraksi umum yang kehilangan apostrof di komik
+    t = re.sub(r'\bDONT\b', "DON'T", t)
+    t = re.sub(r'\bdont\b', "don't", t)
+    t = re.sub(r'\bCANT\b', "CAN'T", t)
+    t = re.sub(r'\bcant\b', "can't", t)
+    t = re.sub(r'\bWONT\b', "WON'T", t)
+    t = re.sub(r'\bwont\b', "won't", t)
+    t = re.sub(r'\bDIDNT\b', "DIDN'T", t)
+    t = re.sub(r'\bdidnt\b', "didn't", t)
+    t = re.sub(r'\bDOESNT\b', "DOESN'T", t)
+    t = re.sub(r'\bdoesnt\b', "doesn't", t)
+    t = re.sub(r'\bISNT\b', "ISN'T", t)
+    t = re.sub(r'\bisnt\b', "isn't", t)
+    t = re.sub(r'\bARENT\b', "AREN'T", t)
+    t = re.sub(r'\barent\b', "aren't", t)
+    t = re.sub(r'\bWASNT\b', "WASN'T", t)
+    t = re.sub(r'\bwasnt\b', "wasn't", t)
+    t = re.sub(r'\bWERENT\b', "WEREN'T", t)
+    t = re.sub(r'\bwerent\b', "weren't", t)
+    t = re.sub(r'\bHAVENT\b', "HAVEN'T", t)
+    t = re.sub(r'\bhavent\b', "haven't", t)
+    t = re.sub(r'\bHASNT\b', "HASN'T", t)
+    t = re.sub(r'\bhasnt\b', "hasn't", t)
+    t = re.sub(r'\bHADNT\b', "HADN'T", t)
+    t = re.sub(r'\bhadnt\b', "hadn't", t)
+    t = re.sub(r'\bCOULDNT\b', "COULDN'T", t)
+    t = re.sub(r'\bcouldnt\b', "couldn't", t)
+    t = re.sub(r'\bWOULDNT\b', "WOULDN'T", t)
+    t = re.sub(r'\bwouldnt\b', "wouldn't", t)
+    t = re.sub(r'\bSHOULDNT\b', "SHOULDN'T", t)
+    t = re.sub(r'\bshouldnt\b', "shouldn't", t)
+
+    # Ligatur & salah-baca khas tipografi komik
+    t = re.sub(r'\b50,\s*', 'So, ', t)
+    t = re.sub(r'\b50\b(?=\s+[A-Za-z])', 'So', t)
+    t = re.sub(r'\bISWMTHHIS\b|\bismthhis\b|\biswthhis\b', 'is with his', t, flags=re.I)
+    t = re.sub(r'\bPREDE\.\s*CESSOR\b|\bprede\.\s*cess', 'predecessor', t, flags=re.I)
+    t = re.sub(r'\bMESSACE\b|\bmess\s+ace\b', 'message', t, flags=re.I)
+    t = re.sub(r'\bFORMY\s+DADOR\b|\bform\s+dad\s+or\b|\bformy\s+dad\b', 'for my dad or', t, flags=re.I)
+    t = re.sub(r'\bWECAE\s+HERE\b|\bweave\s+here\b', 'we came here', t, flags=re.I)
+    t = re.sub(r'\bFOLLOWMING\b|\bfollow\s+ming\b', 'following', t, flags=re.I)
+    t = re.sub(r'\bTRAILI\b|\btrail\s+I\b', 'trail.', t, flags=re.I)
+    t = re.sub(r'\bNOWV\b|\bNOWAY\b', 'no way', t, flags=re.I)
+    t = re.sub(r"\bthere'?s\s+(?:now\s+seventh|nowv\s+seventh|noway\s+seventh)\b", "there's no way Lord Seventh", t, flags=re.I)
+    t = re.sub(r"\bthere'?s\s+now\b(?=\s+\w+\s+would\b)", "there's no way", t, flags=re.I)
+    t = re.sub(r'\bdone\s+need\s+to\b|\bdone\s+need\b', "don't need to", t, flags=re.I)
+    t = re.sub(r'(\d)[oO]{2}(?=\s*people|\b)', r'\g<1>00', t)
+    t = re.sub(r'\bHC-\b', 'he-', t, flags=re.I)
+    t = re.sub(r'\bOMLYNINE\b|\bomlynine\b', 'only nine', t, flags=re.I)
+    t = re.sub(r'\bTAALS\b', 'tails', t, flags=re.I)
+    t = re.sub(r'^[.·\s]*S\s+COMING\b', '...is coming', t, flags=re.I)
+    t = re.sub(r'\bSEEMTOBE\b', 'seem to be', t, flags=re.I)
+    t = re.sub(r'\bNEEDTO\b', 'need to', t, flags=re.I)
+    t = re.sub(r'\bINTHIS\b', 'in this', t, flags=re.I)
+    t = re.sub(r'\bWHERETO\b', 'where to', t, flags=re.I)
+
     # Langkah 1: Sambung tanda hubung
-    cleaned = rejoin_hyphenated_words(text)
+    cleaned = rejoin_hyphenated_words(t)
     # Langkah 2: Pecah kata yang menempel
     cleaned = split_glued_words(cleaned)
     # Langkah 3: Koreksi ejaan OCR

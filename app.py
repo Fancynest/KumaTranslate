@@ -37,7 +37,8 @@ from src.text_utils import (
     post_process_latin_ocr,
     calculate_ocr_quality,
     filter_cross_bubble_hallucinations,
-    CJK_REGEX
+    CJK_REGEX,
+    PUNCT_AND_DIGITS_REGEX
 )
 from pydantic import BaseModel
 
@@ -138,11 +139,17 @@ class TranslationEngine:
         # 1. OCR teks dan Filter sebelum translate
         raw_candidates = []
         for b in bubbles:
-            # Lewati type=="free_text" secara default (kecuali translate_free_text=True) agar tidak menimpa SFX
-            if not translate_free_text and b.get("type") == "free_text":
+            # Lewati type=="free_text" / "text_free" secara default (kecuali translate_free_text=True) agar tidak menimpa SFX
+            if not translate_free_text and b.get("type") in ["free_text", "text_free"]:
                 continue
             raw = self.ocr.read_text(b["crop"], lang_hint=doc_lang_hint)
             if raw and raw.strip():
+                # Jika tidak mengaktifkan terjemahan SFX dan teks terbaca adalah onomatope/SFX murni (kana pendek), lewati
+                if not translate_free_text:
+                    core_raw = PUNCT_AND_DIGITS_REGEX.sub('', raw.strip())
+                    if len(core_raw) <= 3 and re.fullmatch(r'[\u3040-\u309F\u30A0-\u30FF\uFF66-\uFF9Fー]+', core_raw):
+                        print(f"[FILTER] SFX/Onomatope dilewati: '{raw.strip()}'")
+                        continue
                 raw_candidates.append((b, raw.strip()))
 
         # Deteksi apakah halaman didominasi teks Latin/Inggris untuk analisis frekuensi kata
@@ -326,7 +333,8 @@ class TranslationEngine:
 
         text_bboxes = [ab[0]["text_bbox"] for ab in active_bubbles]
         bubble_masks = [ab[0].get("bubble_mask") for ab in active_bubbles]
-        cleaned_img = self.inpainter.clean_bubbles(img, text_bboxes, masks=bubble_masks) if active_bubbles else img
+        safe_bboxes = [ab[0].get("safe_bbox") or ab[0]["text_bbox"] for ab in active_bubbles]
+        cleaned_img = self.inpainter.clean_bubbles(img, text_bboxes, masks=bubble_masks, safe_bboxes=safe_bboxes) if active_bubbles else img
 
         # 5. Typesetting: Render teks terjemahan ke dalam safe_bbox (rongga dalam balon kata)
         output_images = {}

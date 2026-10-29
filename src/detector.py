@@ -382,7 +382,16 @@ class BubbleDetector:
                 # Isi lubang interior (goresan teks gelap) di dalam balon
                 contours, _ = cv2.findContours(bubble_comp, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                 if contours:
-                    cv2.drawContours(bubble_comp, contours, -1, 255, -1)
+                    largest_cnt = max(contours, key=cv2.contourArea)
+                    hull = cv2.convexHull(largest_cnt)
+                    area_cnt = cv2.contourArea(largest_cnt)
+                    area_hull = cv2.contourArea(hull)
+                    # Jika bentuk mendekati konveks (balon standar / kotak narasi), gunakan convex hull
+                    # agar goresan teks yang menempel ke outline tidak mengikis rongga balon
+                    if area_hull > 0 and (area_cnt / area_hull) >= 0.70:
+                        cv2.drawContours(bubble_comp, [hull], -1, 255, -1)
+                    else:
+                        cv2.drawContours(bubble_comp, contours, -1, 255, -1)
             else:
                 bubble_comp = np.zeros((rh, rw), dtype=np.uint8)
                 bubble_comp[rel_ty:rel_ty+rel_th, rel_tx:rel_tx+rel_tw] = 255

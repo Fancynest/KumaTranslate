@@ -179,27 +179,95 @@ class MangaRenderer:
             if all_lines_fit:
                 return font, lines, line_positions, spacing
 
-        # Fallback pada ukuran font minimum: jika token melebihi lebar, pecah per karakter (character break)
-        font = ImageFont.truetype(self.font_path, min_font)
+        # Jika ada kata panjang yang belum muat pada min_font, coba perkecil hingga batas terbaca (size 7-8)
+        # agar kata bahasa Indonesia panjang (cth: 'menyelesaikan', 'mengantuk') tidak terpotong per huruf
+        for dyn_size in range(min_font - 1, 6, -1):
+            try:
+                dyn_font = ImageFont.truetype(self.font_path, dyn_size)
+            except Exception:
+                dyn_font = ImageFont.load_default()
+
+            dyn_spacing = max(1, int(dyn_size * 0.10))
+            sample_bbox = draw.textbbox((0, 0), "Ag", font=dyn_font)
+            dyn_line_h = sample_bbox[3] - sample_bbox[1]
+
+            dyn_token_overflow = False
+            for w in words:
+                w_bb = draw.textbbox((0, 0), w, font=dyn_font)
+                if (w_bb[2] - w_bb[0]) > rect_w:
+                    dyn_token_overflow = True
+                    break
+            if dyn_token_overflow:
+                continue
+
+            dyn_lines = []
+            dyn_cur = []
+            for w in words:
+                cand = " ".join(dyn_cur + [w])
+                w_bb = draw.textbbox((0, 0), cand, font=dyn_font)
+                if (w_bb[2] - w_bb[0]) <= rect_w:
+                    dyn_cur.append(w)
+                else:
+                    if dyn_cur:
+                        dyn_lines.append(" ".join(dyn_cur))
+                        dyn_cur = [w]
+                    else:
+                        dyn_lines.append(w)
+                        dyn_cur = []
+            if dyn_cur:
+                dyn_lines.append(" ".join(dyn_cur))
+
+            dyn_tot_h = len(dyn_lines) * dyn_line_h + (len(dyn_lines) - 1) * dyn_spacing
+            if dyn_tot_h > rect_h:
+                continue
+
+            # Verifikasi baris terhadap kontur mask
+            start_y = by + max(0, (bh - dyn_tot_h) // 2)
+            dyn_line_positions = []
+            dyn_all_fit = True
+            for idx, line in enumerate(dyn_lines):
+                l_bb = draw.textbbox((0, 0), line, font=dyn_font)
+                lw = l_bb[2] - l_bb[0]
+                y_top = start_y + idx * (dyn_line_h + dyn_spacing)
+                y_bot = y_top + dyn_line_h
+                avail_w, cx = get_line_span(y_top, y_bot)
+                if lw <= avail_w:
+                    lx = cx - (lw // 2)
+                elif lw <= rect_w:
+                    lx = bx + (bw - lw) // 2
+                else:
+                    dyn_all_fit = False
+                    break
+                dyn_line_positions.append((lx, y_top))
+
+            if dyn_all_fit:
+                return dyn_font, dyn_lines, dyn_line_positions, dyn_spacing
+
+        # Fallback terakhir jika balon sangat sempit: pecah token dengan hyphen (-),
+        # dan JANGAN PERNAH menyisakan potongan yatim 1-2 huruf (seperti 'menyelesaika\\nn' atau 'mengantu\\nk')
+        font = ImageFont.truetype(self.font_path, max(7, min_font - 4))
         spacing = 1
         sample_bbox = draw.textbbox((0, 0), "Ag", font=font)
         line_h = sample_bbox[3] - sample_bbox[1]
 
-        # Pecah token per karakter jika masih melebihi rect_w pada min_font
         broken_words = []
         for w in words:
             w_bb = draw.textbbox((0, 0), w, font=font)
             if (w_bb[2] - w_bb[0]) > rect_w:
+                # Potong di suku kata yang rapi dengan minimal 3 karakter per potongan
                 cur_chunk = ""
-                for ch in w:
+                for idx_ch, ch in enumerate(w):
                     cand_chunk = cur_chunk + ch
-                    c_bb = draw.textbbox((0, 0), cand_chunk, font=font)
+                    c_bb = draw.textbbox((0, 0), cand_chunk + "-", font=font)
                     if (c_bb[2] - c_bb[0]) <= rect_w:
                         cur_chunk = cand_chunk
                     else:
-                        if cur_chunk:
-                            broken_words.append(cur_chunk)
+                        remaining = len(w) - idx_ch
+                        if len(cur_chunk) >= 3 and remaining >= 3:
+                            broken_words.append(cur_chunk + "-")
                             cur_chunk = ch
+                        elif cur_chunk:
+                            cur_chunk += ch
                         else:
                             broken_words.append(ch)
                             cur_chunk = ""
@@ -343,7 +411,7 @@ class MangaRenderer:
                 ]
 
             max_f = max(14, min(34, int(s_box[3] * 0.38)))
-            min_f = max(11, min(14, int(min(s_box[2], s_box[3]) * 0.12)))
+            min_f = max(8, min(14, int(min(s_box[2], s_box[3]) * 0.12)))
 
             font, lines, positions, spacing = self._fit_text_adaptive(
                 draw, text, tuple(s_box), mask=mask, max_font=max_f, min_font=min_f
@@ -362,7 +430,7 @@ class MangaRenderer:
         font_sizes = [f["base_font_size"] for f in fitted_info]
         import statistics
         page_median_font = statistics.median(font_sizes)
-        font_floor = max(11, int(round(page_median_font * 0.70)))
+        font_floor = max(9, int(round(page_median_font * 0.70)))
         font_ceil = min(36, int(round(page_median_font * 1.30)))
 
         # 3. Second Pass: Render dengan pembatasan [font_floor, font_ceil]
@@ -370,7 +438,7 @@ class MangaRenderer:
             r_box = f_data["render_box"]
             text = f_data["text"]
             mask = f_data["mask"]
-            min_f = f_data["min_font"]
+            min_f = max(8, f_data["min_font"] - 2)
 
             # Coba fit dengan batas harmonis (max_font = font_ceil)
             # Jika teks muat di atas font_floor, font akan berada dalam range [font_floor, font_ceil]

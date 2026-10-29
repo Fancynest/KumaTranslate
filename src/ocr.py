@@ -122,7 +122,14 @@ class MultiLingualOCR:
             return " ".join(results).strip()
         elif lang_hint in ["eng_Latn", "en"]:
             engine = self.rapid_ocr_en or self.rapid_ocr
-            res, _ = engine(img_np)
+            prep_np = img_np
+            if img_np.shape[0] < 90:
+                scale = min(2.5, 120.0 / max(1, img_np.shape[0]))
+                if scale > 1.1:
+                    new_w = int(img_np.shape[1] * scale)
+                    new_h = int(img_np.shape[0] * scale)
+                    prep_np = cv2.resize(img_np, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
+            res, _ = engine(prep_np)
             return " ".join([item[1] for item in res]).strip() if res else ""
         elif lang_hint in ["zho_Hans", "zh"]:
             res, _ = self.rapid_ocr(img_np)
@@ -135,7 +142,14 @@ class MultiLingualOCR:
         # 1. Cek teks Latin / Inggris dengan RapidOCR terlebih dahulu.
         # RapidOCR cepat (ONNX), akurat untuk komik Barat/teks Latin, dan tidak berhalusinasi.
         engine_lat = self.rapid_ocr_en or self.rapid_ocr
-        rapid_res, _ = engine_lat(img_np)
+        prep_np = img_np
+        if img_np.shape[0] < 90:
+            scale = min(2.5, 120.0 / max(1, img_np.shape[0]))
+            if scale > 1.1:
+                new_w = int(img_np.shape[1] * scale)
+                new_h = int(img_np.shape[0] * scale)
+                prep_np = cv2.resize(img_np, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
+        rapid_res, _ = engine_lat(prep_np)
         rapid_text = " ".join([item[1] for item in rapid_res]).strip() if rapid_res else ""
 
         from src.text_utils import count_english_words, calculate_ocr_quality

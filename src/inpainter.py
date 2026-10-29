@@ -17,14 +17,16 @@ class MangaInpainter:
         self,
         image: Image.Image,
         bboxes: List[Tuple[int, int, int, int]],
-        masks: Optional[List[np.ndarray]] = None
+        masks: Optional[List[np.ndarray]] = None,
+        safe_bboxes: Optional[List[Tuple[int, int, int, int]]] = None
     ) -> Image.Image:
         """
         Menghapus goresan teks dialog asli dari balon kata:
         1. Jika bubble_mask tersedia: erosi mask setebal outline (3px), cari seluruh piksel gelap
            di dalam rongga balon, dilasi 2-3px untuk membersihkan fringe anti-aliasing, dan hapus/inpaint
            seluruh goresan tanpa pernah menyentuh outline balon.
-        2. Jika bubble_mask tidak tersedia (fallback): gunakan stroke-level connected components
+        2. Jika safe_bboxes tersedia: garansi kebersihan seluruh interior safe_bbox.
+        3. Jika bubble_mask tidak tersedia (fallback): gunakan stroke-level connected components
            pada text_bbox.
         """
         img_np = np.array(image.convert("RGB"))
@@ -49,12 +51,12 @@ class MangaInpainter:
                 bg_val = int(np.percentile(interior_gray, 92))
                 fill_color = [bg_val, bg_val, bg_val]
 
-                # Deteksi piksel gelap teks di dalam balon
-                dark_thresh = min(190, bg_val - 25)
+                # Deteksi piksel gelap teks di dalam balon (tanpa cap 190 yang meninggalkan fringe anti-aliasing)
+                dark_thresh = min(225, bg_val - 15) if bg_val >= 170 else max(20, bg_val - 25)
                 dark_pixels = (gray < dark_thresh) & interior_idx
 
-                # Dilasi 2-3px untuk menangkap fringe anti-aliasing tepi goresan
-                dark_dilated = cv2.dilate(dark_pixels.astype(np.uint8), k_dilate, iterations=1)
+                # Dilasi 2px untuk menangkap fringe anti-aliasing tepi goresan
+                dark_dilated = cv2.dilate(dark_pixels.astype(np.uint8), k_dilate, iterations=2)
                 dark_to_erase = (dark_dilated > 0) & interior_idx
 
                 # Isi solid fill jika warna seragam (khas manga) atau inpaint jika berpola
@@ -68,6 +70,17 @@ class MangaInpainter:
                     roi_erase = dark_to_erase[by1:by2, bx1:bx2].astype(np.uint8)
                     inpainted = cv2.inpaint(roi_col, roi_erase, inpaintRadius=2, flags=cv2.INPAINT_TELEA)
                     clean_img[by1:by2, bx1:bx2][roi_erase > 0] = inpainted[roi_erase > 0]
+
+                # Garansi kebersihan interior safe_bbox untuk kotak narasi / balon
+                if safe_bboxes is not None and i < len(safe_bboxes) and safe_bboxes[i] is not None:
+                    sx, sy, sw, sh = safe_bboxes[i]
+                    margin = 2
+                    sx1, sy1 = max(0, sx + margin), max(0, sy + margin)
+                    sx2, sy2 = min(w_img, sx + sw - margin), min(h_img, sy + sh - margin)
+                    if sx2 > sx1 and sy2 > sy1 and bg_val >= 170:
+                        safe_dark = (gray[sy1:sy2, sx1:sx2] < dark_thresh)
+                        clean_img[sy1:sy2, sx1:sx2][safe_dark] = fill_color
+
                 continue
 
             # Mode 2 (Fallback): Stroke-level inpainting berbasis text_bbox
