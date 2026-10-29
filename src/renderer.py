@@ -72,10 +72,33 @@ class MangaRenderer:
         dengan penempatan teks terpusat secara vertikal dan verifikasi lebar irisan per baris.
         """
         bx, by, bw, bh = bbox
-        words = text.split()
-        if not words:
+        raw_words = text.split()
+        if not raw_words:
             font = ImageFont.truetype(self.font_path, min_font)
             return font, [], [], 1
+
+        # Pecah kata bersambung tanda hubung (cth: 'Makoto-chan', 'Tsubai-san')
+        # agar dapat dipisah baris saat lebar balon sempit, menghasilkan ukuran font yang jauh lebih terbaca
+        words = []
+        for w in raw_words:
+            if '-' in w and not w.startswith('-') and not w.endswith('-'):
+                parts = w.split('-')
+                for idx_p, p in enumerate(parts):
+                    if idx_p < len(parts) - 1:
+                        words.append(p + '-')
+                    else:
+                        words.append(p)
+            else:
+                words.append(w)
+
+        def join_tokens(tokens: List[str]) -> str:
+            res = ""
+            for t in tokens:
+                if not res or res.endswith('-'):
+                    res += t
+                else:
+                    res += " " + t
+            return res
 
         pad_x = max(2, int(bw * 0.08))
         pad_y = max(2, int(bh * 0.08))
@@ -137,19 +160,19 @@ class MangaRenderer:
             lines = []
             cur_line = []
             for w in words:
-                cand = " ".join(cur_line + [w])
+                cand = join_tokens(cur_line + [w])
                 w_bb = draw.textbbox((0, 0), cand, font=font)
                 if (w_bb[2] - w_bb[0]) <= rect_w:
                     cur_line.append(w)
                 else:
                     if cur_line:
-                        lines.append(" ".join(cur_line))
+                        lines.append(join_tokens(cur_line))
                         cur_line = [w]
                     else:
                         lines.append(w)
                         cur_line = []
             if cur_line:
-                lines.append(" ".join(cur_line))
+                lines.append(join_tokens(cur_line))
 
             total_h = len(lines) * line_h + (len(lines) - 1) * spacing
             if total_h > rect_h:
@@ -203,19 +226,19 @@ class MangaRenderer:
             dyn_lines = []
             dyn_cur = []
             for w in words:
-                cand = " ".join(dyn_cur + [w])
+                cand = join_tokens(dyn_cur + [w])
                 w_bb = draw.textbbox((0, 0), cand, font=dyn_font)
                 if (w_bb[2] - w_bb[0]) <= rect_w:
                     dyn_cur.append(w)
                 else:
                     if dyn_cur:
-                        dyn_lines.append(" ".join(dyn_cur))
+                        dyn_lines.append(join_tokens(dyn_cur))
                         dyn_cur = [w]
                     else:
                         dyn_lines.append(w)
                         dyn_cur = []
             if dyn_cur:
-                dyn_lines.append(" ".join(dyn_cur))
+                dyn_lines.append(join_tokens(dyn_cur))
 
             dyn_tot_h = len(dyn_lines) * dyn_line_h + (len(dyn_lines) - 1) * dyn_spacing
             if dyn_tot_h > rect_h:
@@ -430,7 +453,7 @@ class MangaRenderer:
         font_sizes = [f["base_font_size"] for f in fitted_info]
         import statistics
         page_median_font = statistics.median(font_sizes)
-        font_floor = max(9, int(round(page_median_font * 0.70)))
+        font_floor = max(11, int(round(page_median_font * 0.70)))
         font_ceil = min(36, int(round(page_median_font * 1.30)))
 
         # 3. Second Pass: Render dengan pembatasan [font_floor, font_ceil]

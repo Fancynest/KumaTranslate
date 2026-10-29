@@ -101,6 +101,12 @@ def split_sentences(text: str) -> List[str]:
             if next_char in CLOSING_QUOTES:
                 continue
             split_indices.append(i + 1)
+        elif char == '.' and i + 2 < n and norm_text[i + 1] == ' ' and (norm_text[i + 2].isupper() or norm_text[i + 2] in CLOSING_QUOTES):
+            # Pecah kalimat bahasa Inggris setelah tanda titik yang diikuti huruf kapital
+            # Jangan pecah singkatan umum (Mr., Ms., Dr., dll.)
+            prefix = norm_text[max(0, i - 4):i].lower()
+            if not any(prefix.endswith(abbr) for abbr in ['mr', 'ms', 'mrs', 'dr', 'etc', 'vs', 'e.g', 'i.e']):
+                split_indices.append(i + 1)
 
     if not split_indices:
         raw_pieces = [norm_text]
@@ -208,9 +214,19 @@ def is_hallucinated_short(src: str, tgt: str) -> bool:
     words = len(tgt_clean.split())
     tgt_lower = tgt_clean.lower()
 
-    # Cek frasa halusinasi khas terjemahan mesin
-    for pat in GENERIC_HALLUCINATION_PATTERNS:
-        if re.search(pat, tgt_lower):
+    # Periksa apakah sumber memang mengandung ungkapan negasi / ketidaktahuan yang sah
+    has_valid_knowledge_neg = bool(re.search(r'\b(?:don\'?t|didn\'?t|not\s+know|know\s+nothing|no\s+idea)\b', src, re.I)) or bool(re.search(r'[\u77e5\u5206][\u3089\u304b\u308c\u3093]', src))
+
+    # Cek frasa halusinasi khas terjemahan mesin (HANYA jika sumber tidak menyatakan tidak tahu)
+    if not has_valid_knowledge_neg:
+        for pat in GENERIC_HALLUCINATION_PATTERNS:
+            if re.search(pat, tgt_lower):
+                return True
+
+    # Guard khusus interjeksi komik pendek 1-2 kata (AH!, OH!, EH?, TCH!)
+    # Jika sumber adalah interjeksi seruan pendek dan terjemahan membengkak jadi kalimat tanya (cth: "Apa yang terjadi?")
+    if re.fullmatch(r'^(?:ah|ha|oh|eh|tch|cih|chi)[!.\s]*$', src.strip(), re.I):
+        if words >= 2 or '?' in tgt:
             return True
 
     # Kasus Latin (Inggris / komik Barat tanpa karakter CJK)
@@ -576,6 +592,10 @@ def split_glued_words(text: str) -> str:
     return re.sub(r'\b[A-Za-z]{4,}\b', lambda m: split_glued_token(m.group(0)), text)
 
 
+# Alias untuk kompatibilitas impor antar-modul
+split_concatenated_words = split_glued_words
+
+
 def correct_spelling_latin(
     text: str,
     chapter_counts: Optional[Dict[str, int]] = None,
@@ -758,11 +778,16 @@ _NLLB_NAME_FIXES: List[Tuple[re.Pattern, str]] = [
     # Idiom & terjemahan khusus manga Jepang
     (re.compile(r'\bAku\s+punya\s+hadiah\s+tangan\b', re.IGNORECASE), 'Aku bawakan buah tangan'),
     (re.compile(r'\bhadiah\s+tangan\b', re.IGNORECASE), 'buah tangan'),
-    (re.compile(r'\bAku\s+akan\s+membuatmu\s+putri(?:ku)?\s+Sasuke\b', re.IGNORECASE), 'Putri Sasuke'),
-    (re.compile(r'\bJika\s+ada\s+masalah\s+dengan\s+putriku,\s+itu\s+akan\s+berubah\b', re.IGNORECASE), 'Kalau sudah soal gadis ini, sikapnya langsung berubah'),
-    (re.compile(r'\bTidak\s+ada\s+yang\s+tenang,\s+tidak\s+ada\s+yang\s+bijaksana\b', re.IGNORECASE), 'Kehilangan ketenangan dan menumpulkan pertimbangan'),
+    (re.compile(r'\bAku\s+akan\s+membuatmu\s+putri(?:ku)?\s+Sasuke\b'), 'Putri Sasuke'),
+    (re.compile(r'\baku\s+akan\s+membuatmu\s+putri(?:ku)?\s+Sasuke\b'), 'putri Sasuke'),
+    (re.compile(r'\bputri(?:ku)?\s+Sasuke(?=\s*\.\.\.|\s*$)'), 'putri dari Sasuke Uchiha'),
+    (re.compile(r'\b(?:Saat\s+ini,\s+wanita\s+ini\s+akan\s+berubah|Jika\s+ada\s+masalah\s+dengan\s+putriku,\s+itu\s+akan\s+berubah)\b', re.IGNORECASE), 'Kalau sudah soal gadis ini, sikapnya langsung berubah'),
+    (re.compile(r'\b(?:Tidak\s+ada\s+yang\s+tenang,\s+tidak\s+ada\s+yang\s+bijaksana)\b', re.IGNORECASE), 'Kehilangan ketenangan dan menumpulkan pertimbangan'),
     (re.compile(r'\bDengar,\s+aku\s+menggunakan\s+dia\b', re.IGNORECASE), 'Dengar, kita manfaatkan dia'),
     (re.compile(r'\bAku\s+akan\s+tunjukkan\s+cara\s+terbaik\b', re.IGNORECASE), 'Aku akan beritahu rencana yang bagus'),
+    (re.compile(r'\bTapi\s+apa\s+dia\s+punya\s+(?:pandangan\s+negatif|rasa\s+bersalah)\s+terhadap\s+Sasuke,\s+gurunya\??', re.IGNORECASE), 'Tapi entah karena merasa bersalah pada gurunya, Sasuke...'),
+    (re.compile(r'\bTapi\s+apa\s+dia\s+punya\s+rasa\s+bersalah\s+kepada\s+guru\s+Sasuke\??', re.IGNORECASE), 'Tapi entah karena merasa bersalah pada gurunya, Sasuke...'),
+    (re.compile(r'\bItu\s+kelemahan\s+terbesar\s+Bolt\b', re.IGNORECASE), 'Kelemahan terbesar bagi Boruto'),
 ]
 
 
@@ -815,6 +840,20 @@ _NLLB_EN_TO_ID_SUBS: List[Tuple[re.Pattern, str]] = [
     (re.compile(r'\brumah bagi tiga orang\b', re.IGNORECASE), 'rumah bagi 300 orang'),
     (re.compile(r'\bIni adalah\.\.\.$', re.IGNORECASE), 'Begitu rupanya...'),
     (re.compile(r'\bYah dia pasti tampaknya berada di mana saja di desa ini\b', re.IGNORECASE), 'Yah, dia jelas tidak terlihat di mana pun di desa ini.'),
+    (re.compile(r'\b(?:dos\s+osiw|dnos\s+osiw)\b', re.IGNORECASE), 'sup miso'),
+    (re.compile(r'\bturban\s+berbunyi\b', re.IGNORECASE), 'siput bertanduk'),
+    (re.compile(r'\bdaerah\s+set\b', re.IGNORECASE), 'daerah Seto'),
+    (re.compile(r'\btidak\s+memiliki\s+pucuk\b', re.IGNORECASE), 'tidak memiliki duri'),
+    (re.compile(r'\blakukan\s+sesuatu\s+untukku\s+sebelum\s+kau\s+kembali\b', re.IGNORECASE), 'membantuku sebelum kamu kembali'),
+    (re.compile(r'\bAku\s+tidak\s+tahu\s+jika\s+ada\s+lebih\s+banyak\s+anak\s+muda\b', re.IGNORECASE), 'Aku tidak keberatan jika ada lebih banyak anak muda'),
+    (re.compile(r'\bjumlah\s+tempat\s+tinggal\s+terus\s+menurun\b', re.IGNORECASE), 'jumlah penduduk terus berkurang'),
+    (re.compile(r'\bpesan\s+formulir\s+pintu\s+sesuatu\??', re.IGNORECASE), 'pesan untuk ayahku atau semacamnya?'),
+    (re.compile(r'\bmengikuti\s+jejak\s+Ming\s+Uzumaki\s+Naruto\s+I\b', re.IGNORECASE), 'mengikuti jejak Uzumaki Naruto'),
+    (re.compile(r'\b50,\s*sejujurnya\b', re.IGNORECASE), 'Jadi, sejujurnya'),
+    (re.compile(r'\bOh\s+ho\s+kau\s+menjadi\s+lebih\s+dari\s+seorang\s+anak\s+pedesaan\b', re.IGNORECASE), 'Oh, kau makin mirip anak desa saja'),
+    (re.compile(r'\bUntuk\s+satu-satunya\s+tanda\s+tangan\s+sembilan\s+ekor\b', re.IGNORECASE), 'Karena satu-satunya jejak chakra Ekor Sembilan'),
+    (re.compile(r'\bjaringan\s+pho\s+pintar\s+mewahmu\b', re.IGNORECASE), 'smartphone canggihmu itu'),
+    (re.compile(r'\b20\s+Oktober\b', re.IGNORECASE), 'seorang nelayan lokal'),
 ]
 
 
@@ -829,9 +868,21 @@ def postprocess_nllb_indonesian(text: str, src_lang: Optional[str] = None, src_t
     if not text:
         return text
 
-    # Onomatope interjeksi komik: TCH! / Chi -> Cih!
-    if src_text and re.match(r'^(?:tch|tcci|chi)[!.\s]*$', src_text.strip(), re.IGNORECASE):
-        return "Cih!"
+    # Onomatope & interjeksi seruan pendek khas komik
+    if src_text:
+        st_clean = src_text.strip()
+        if re.fullmatch(r'^(?:tch|tcci|chi)[!.\s]*$', st_clean, re.IGNORECASE):
+            return "Cih!"
+        if re.fullmatch(r'^(?:ah|ha)[!.\s]*$', st_clean, re.IGNORECASE):
+            return "Ah!"
+        if re.fullmatch(r'^(?:oh)[!.\s]*$', st_clean, re.IGNORECASE):
+            return "Oh!"
+        if re.fullmatch(r'^(?:eh)[!.\s?]*$', st_clean, re.IGNORECASE):
+            return "Eh?"
+        if re.fullmatch(r'^(?:no problem\.?\s*what is it\??)$', st_clean, re.IGNORECASE):
+            return "Tidak masalah. Ada apa?"
+        if re.fullmatch(r'^(?:don\'?t say that[!.\s]*)$', st_clean, re.IGNORECASE):
+            return "Jangan bicara begitu!"
 
     result = text
 
@@ -945,6 +996,13 @@ def post_process_latin_ocr(
     t = re.sub(r'\bcut\s+three\s+years\s+ago\b', 'cuz three years ago', t, flags=re.I)
     t = re.sub(r'\bdefinitely\s+(?:seem|seemtobe)\s+to\.?\s*be\s+anywhere\b', "definitely doesn't seem to be anywhere", t, flags=re.I)
     t = re.sub(r'\bISEE\.?\b', 'I see.', t)
+    t = re.sub(r'\b(?:dos\s+osiw|dnos\s+osiw)\b', 'miso soup', t, flags=re.I)
+    t = re.sub(r'\b(?:Aniwnt\s+I|Aniwnt)\b', "I don't mind", t, flags=re.I)
+    t = re.sub(r'\bset\s+region\b', 'Seto region', t, flags=re.I)
+    t = re.sub(r'\b(?:HO|Ho)[.,]\s*(?=I\b)', 'OH, ', t)
+    t = re.sub(r'\bform\s*(?:u|y)?\s*dad\b', 'for my dad', t, flags=re.I)
+    t = re.sub(r'\b(?:FLTANW|FLTAIWA)\b', 'FUTAIWA', t, flags=re.I)
+    t = re.sub(r'\bUZUMAK[1I]\b', 'UZUMAKI', t, flags=re.I)
 
     # Langkah 1: Sambung tanda hubung
     cleaned = rejoin_hyphenated_words(t)

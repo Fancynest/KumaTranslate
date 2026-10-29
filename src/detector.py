@@ -866,6 +866,26 @@ class BubbleDetector:
                     font_size=median_font_size
                 )
 
+                # Periksa berapa kotak teks penyusun cluster ini
+                boxes_in_cluster = [
+                    b for b in unassigned_text_boxes
+                    if b[0] >= fx - 12 and b[1] >= fy - 12 and (b[0] + b[2]) <= (fx + fw + 12) and (b[1] + b[3]) <= (fy + fh + 12)
+                ]
+
+                # Jika cluster memiliki >= 2 baris teks bertumpuk atau cukup lebar untuk sebuah kalimat,
+                # ini adalah balon kata dialog / kotak narasi (cth: balon berbayang screentone abu-abu)
+                # Klasifikasikan sebagai 'text_bubble' agar selalu diterjemahkan & di-render!
+                is_stacked_dialogue = len(boxes_in_cluster) >= 2 or (fw >= 65 and fh >= 20)
+                b_type = "text_bubble" if is_stacked_dialogue else "free_text"
+                b_source = "dbnet_cluster" if is_stacked_dialogue else "yolo"
+
+                # Pastikan safe_bbox melingkupi teks cluster dengan margin yang nyaman
+                sx = min(free_safe_bbox[0], max(0, fx - 10))
+                sy = min(free_safe_bbox[1], max(0, fy - 10))
+                sx2 = max(free_safe_bbox[0] + free_safe_bbox[2], min(w_orig, fx + fw + 10))
+                sy2 = max(free_safe_bbox[1] + free_safe_bbox[3], min(h_orig, fy + fh + 10))
+                free_safe_bbox = (sx, sy, sx2 - sx, sy2 - sy)
+
                 crop_pad = max(2, int(min(fw, fh) * 0.12))
                 crop_box = (max(0, fx - crop_pad), max(0, fy - crop_pad), fw + 2 * crop_pad, fh + 2 * crop_pad)
                 crop_img = self._prepare_ocr_crop(
@@ -885,8 +905,8 @@ class BubbleDetector:
                     "bbox": free_safe_bbox,
                     "crop": crop_img,
                     "area": free_safe_bbox[2] * free_safe_bbox[3],
-                    "source": "yolo",
-                    "type": "free_text"
+                    "source": b_source,
+                    "type": b_type
                 })
 
         # 7. Selesaikan tabrakan antar-balon yang menempel / overlapping (connected bubbles)

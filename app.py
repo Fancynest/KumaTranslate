@@ -154,18 +154,29 @@ class TranslationEngine:
 
         raw_candidates = []
         for b in bubbles:
-            # Lewati type=="free_text" / "text_free" secara default (kecuali translate_free_text=True) agar tidak menimpa SFX
-            if not translate_free_text and b.get("type") in ["free_text", "text_free"]:
-                continue
             raw = self.ocr.read_text(b["crop"], lang_hint=effective_lang_hint)
-            if raw and raw.strip():
-                # Jika tidak mengaktifkan terjemahan SFX dan teks terbaca adalah onomatope/SFX murni (kana pendek), lewati
-                if not translate_free_text:
-                    core_raw = PUNCT_AND_DIGITS_REGEX.sub('', raw.strip())
-                    if len(core_raw) <= 3 and re.fullmatch(r'[\u3040-\u309F\u30A0-\u30FF\uFF66-\uFF9Fー]+', core_raw):
-                        print(f"[FILTER] SFX/Onomatope dilewati: '{raw.strip()}'")
-                        continue
-                raw_candidates.append((b, raw.strip()))
+            if not raw or not raw.strip():
+                continue
+
+            # Jika tidak mengaktifkan terjemahan SFX dan elemen bertipe free_text / teks bebas:
+            if not translate_free_text and b.get("type") in ["free_text", "text_free"]:
+                # Periksa apakah ini dialog / narasi bermakna (>= 2 kata Latin atau kalimat CJK bermakna)
+                latin_words = len(re.findall(r'[A-Za-z]+', raw))
+                cjk_kanji = len(re.findall(r'[\u4E00-\u9FFF]', raw))
+                if latin_words < 2 and cjk_kanji == 0:
+                    print(f"[FILTER] SFX/Teks bebas dilewati: '{raw.strip()}'")
+                    continue
+                # Promosikan elemen teks narasi/dialog ini agar diolah penuh sebagai balon kata
+                b["type"] = "text_bubble"
+
+            # Filter onomatope/SFX murni (kana pendek <= 3 karakter tanpa kanji)
+            if not translate_free_text:
+                core_raw = PUNCT_AND_DIGITS_REGEX.sub('', raw.strip())
+                if len(core_raw) <= 3 and re.fullmatch(r'[\u3040-\u309F\u30A0-\u30FF\uFF66-\uFF9Fー]+', core_raw):
+                    print(f"[FILTER] SFX/Onomatope dilewati: '{raw.strip()}'")
+                    continue
+
+            raw_candidates.append((b, raw.strip()))
 
         # Deteksi apakah halaman didominasi teks Latin/Inggris untuk analisis frekuensi kata
         all_words_on_page: Dict[str, int] = {}
