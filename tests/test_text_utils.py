@@ -209,11 +209,41 @@ class TestTextUtils(unittest.TestCase):
 
     def test_post_process_latin_ocr_pipeline(self):
         text = "YOUKNOW THE SIGNA- TURE IS IN TEH BOOK"
-        processed, quality = post_process_latin_ocr(text)
-        self.assertIn("YOU KNOW", processed)
-        self.assertIn("SIGNATURE", processed)
-        self.assertIn("THE BOOK", processed)
-        self.assertGreaterEqual(quality, 0.8)
+        # Tanpa normalisasi case: tetap huruf kapital
+        processed_raw, quality_raw = post_process_latin_ocr(text, normalize_case=False)
+        self.assertIn("YOU KNOW", processed_raw)
+        self.assertIn("SIGNATURE", processed_raw)
+        self.assertIn("THE BOOK", processed_raw)
+        self.assertGreaterEqual(quality_raw, 0.8)
+
+        # Dengan normalisasi case (default): menjadi sentence case natural
+        processed_norm, quality_norm = post_process_latin_ocr(text, normalize_case=True)
+        self.assertEqual(processed_norm, "You know the signature is in the book")
+        self.assertGreaterEqual(quality_norm, 0.8)
+
+    def test_normalize_latin_case(self):
+        from src.text_utils import normalize_latin_case
+        self.assertEqual(
+            normalize_latin_case("THEY DON'T NEED TO KNOW THAT!"),
+            "They don't need to know that!"
+        )
+        self.assertEqual(
+            normalize_latin_case("WELL, HE DEFINITELY SEEMS TO BE HERE."),
+            "Well, he definitely seems to be here."
+        )
+        self.assertEqual(
+            normalize_latin_case("NO WAY! I CAN'T BELIEVE IT."),
+            "No way! I can't believe it."
+        )
+        # Ratio huruf kapital < 70% atau huruf < 3 tidak disentuh
+        self.assertEqual(normalize_latin_case("Art by Kasuga"), "Art by Kasuga")
+        self.assertEqual(normalize_latin_case("OK"), "OK")
+
+    def test_defnitely_glued_guard(self):
+        # Memastikan 'DEFNITELY' tidak terpecah menjadi 'DEF NIT ELY'
+        processed, _ = post_process_latin_ocr("WELL HE DEFNITELY SEEM TO BE", normalize_case=False)
+        self.assertIn("DEFINITELY", processed)
+        self.assertNotIn("DEF NIT ELY", processed)
 
     def test_is_hallucinated_short_latin(self):
         # Tes wajib user: "I see." tidak boleh menjadi kalimat tentang "tidak tahu apa yang terjadi"

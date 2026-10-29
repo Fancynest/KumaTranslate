@@ -179,7 +179,9 @@ GENERIC_HALLUCINATION_PATTERNS = [
     r'saya tidak tahu apa',
     r'tidak tahu apa yang',
     r'tidak tahu harus berkata apa',
-    r"i don't know what"
+    r"i don't know what",
+    r'^(?:aku\s+|saya\s+)?tidak\s+tahu[\.!?]*$',
+    r'^(?:i\s+)?don\'?t\s+know[\.!?]*$'
 ]
 
 
@@ -190,8 +192,10 @@ def is_hallucinated_short(src: str, tgt: str) -> bool:
       core = src tanpa spasi, angka, dan tanda baca; n = len(core).
       Jika n == 0 atau n > 3: False.
       Jika core mengandung kanji: True bila kata >= 2n + 4.
-      Jika katakana murni: True bila kata >= 3 (khas halusinasi SFX komik).
-      Selain itu: True bila kata >= 5.
+      Jika kana murni (Hiragana/Katakana):
+        Jika n <= 2 (khas onomatopoeia/SFX seperti グリ, ぢゅ, ゴゴ, はは): True bila kata >= 3.
+        Jika Katakana murni (n == 3): True bila kata >= 3.
+        Selain itu: True bila kata >= 5.
     - Untuk Latin (Inggris/Barat):
       src_words = kata dalam sumber (len <= 3).
       True jika keluaran mengandung frasa halusinasi khas terjemahan mesin,
@@ -204,17 +208,17 @@ def is_hallucinated_short(src: str, tgt: str) -> bool:
     words = len(tgt_clean.split())
     tgt_lower = tgt_clean.lower()
 
+    # Cek frasa halusinasi khas terjemahan mesin
+    for pat in GENERIC_HALLUCINATION_PATTERNS:
+        if re.search(pat, tgt_lower):
+            return True
+
     # Kasus Latin (Inggris / komik Barat tanpa karakter CJK)
     if not CJK_REGEX.search(src):
         src_words = re.findall(r'\b[A-Za-z0-9]+\b', src)
         n_words = len(src_words)
         if n_words == 0 or n_words > 3:
             return False
-
-        # Cek frasa halusinasi khas terjemahan mesin pada sumber pendek
-        for pat in GENERIC_HALLUCINATION_PATTERNS:
-            if re.search(pat, tgt_lower):
-                return True
 
         # Pembengkakan kata tidak wajar pada sumber sangat pendek (<= 3 kata)
         if n_words <= 2 and words >= 5:
@@ -233,11 +237,15 @@ def is_hallucinated_short(src: str, tgt: str) -> bool:
     if re.search(r'[\u4E00-\u9FFF\u3400-\u4DBF]', core):
         return words >= (2 * n + 4)
 
-    # Jika katakana murni (khas onomatopoeia/SFX seperti グリ, ゴゴゴ, ドン)
-    if re.fullmatch(r'[\u30A0-\u30FF\uFF66-\uFF9Fー]+', core):
-        return words >= 3
+    # Jika kana murni (Hiragana atau Katakana tanpa Kanji, khas onomatopoeia/SFX seperti グリ, ぢゅ, ゴゴ, はは)
+    if re.fullmatch(r'[\u3040-\u309F\u30A0-\u30FF\uFF66-\uFF9Fー]+', core):
+        if n <= 2:
+            return words >= 3
+        if re.fullmatch(r'[\u30A0-\u30FF\uFF66-\uFF9Fー]+', core):
+            return words >= 3
+        return words >= 5
 
-    # Pola lainnya (Hiragana murni pendek, dsb.)
+    # Pola lainnya (Hangul / kombinasi)
     return words >= 5
 
 
@@ -495,6 +503,13 @@ def split_glued_token(token: str) -> str:
     if n <= 3 or s in ENGLISH_VOCAB:
         return token
 
+    # Cegah pemecahan token jika token merupakan variasi 1-delete dari kata kamus frekuensi tinggi
+    # (misal 'defnitely' -> 'definitely' jangan dipecah jadi 'def', 'nit', 'ely')
+    if s in DELETES_1:
+        best_cand = max(DELETES_1[s], key=lambda w: WORD_FREQ.get(w, 0))
+        if WORD_FREQ.get(best_cand, 0) >= 50000:
+            return token
+
     cost = [0.0] + [float('inf')] * n
     best_prev = [0] * (n + 1)
 
@@ -588,8 +603,13 @@ def correct_spelling_latin(
             return _match_case(tok, low_norm)
 
         # 6. Cari kandidat SymSpell (jarak edit <= 2)
-        input_deletes = {low[:i] + low[i+1:] for i in range(len(low))}
         cands = {}
+        # Kasus 1-delete langsung (input adalah 1-delete dari kata kamus yang sah, e.g. defnitely -> definitely)
+        if low in DELETES_1:
+            for cand in DELETES_1[low]:
+                cands[cand] = (1, WORD_FREQ.get(cand, 0))
+
+        input_deletes = {low[:i] + low[i+1:] for i in range(len(low))}
         for d in input_deletes:
             if d in ENGLISH_VOCAB:
                 cands[d] = (1, WORD_FREQ.get(d, 0))
@@ -631,11 +651,44 @@ def calculate_ocr_quality(text: str) -> float:
     return in_vocab / float(len(words))
 
 
+def normalize_latin_case(text: str) -> str:
+    """
+    Normalisasi huruf kapital untuk teks Latin komik:
+    Jika >= 70% huruf adalah kapital dan ada >= 3 huruf, ubah ke huruf kecil
+    dengan huruf kapital di awal kalimat dan 'I' tunggal / kontraksinya tetap kapital.
+    Negasi ('don't', 'can't', 'no way') dan makna tetap terjaga.
+    """
+    if not text:
+        return ""
+    letters = [c for c in text if c.isalpha()]
+    if len(letters) < 3:
+        return text
+    upper_ratio = sum(1 for c in letters if c.isupper()) / len(letters)
+    if upper_ratio < 0.70:
+        return text
+
+    # Ubah ke lowercase
+    norm = text.lower()
+
+    # Kapitalisasi di awal string (melewati karakter pembuka seperti kutip/titik)
+    norm = re.sub(r'(^|[\r\n]+)([\s"\'\(]*)(\b[a-z])', lambda m: m.group(1) + m.group(2) + m.group(3).upper(), norm)
+
+    # Kapitalisasi setelah tanda akhir kalimat (. ! ? …)
+    norm = re.sub(r'([.!?…]+[\s"\'\)]+)([a-z])', lambda m: m.group(1) + m.group(2).upper(), norm)
+
+    # Huruf 'I' tunggal dan kontraksinya tetap kapital
+    norm = re.sub(r'\bi\b', 'I', norm)
+    norm = re.sub(r"\bi('m|'ve|'ll|'d)\b", lambda m: "I" + m.group(1), norm)
+
+    return norm
+
+
 def post_process_latin_ocr(
     text: str,
     chapter_counts: Optional[Dict[str, int]] = None,
     glossary_terms: Optional[Set[str]] = None,
-    protected_names: Optional[Set[str]] = None
+    protected_names: Optional[Set[str]] = None,
+    normalize_case: bool = True
 ) -> Tuple[str, float]:
     """
     Pipeline pasca-OCR lengkap untuk teks Latin komik:
@@ -643,6 +696,7 @@ def post_process_latin_ocr(
     2. Pecah token menempel ("YOUKNOW" -> "YOU KNOW")
     3. Koreksi salah baca dengan SymSpell
     4. Hitung skor ocr_quality
+    5. Normalisasi huruf kapital (ALL-CAPS -> sentence case) untuk input terjemahan yang optimal
     """
     if not text or not text.strip():
         return "", 1.0
@@ -655,6 +709,9 @@ def post_process_latin_ocr(
     cleaned = correct_spelling_latin(cleaned, chapter_counts, glossary_terms, protected_names)
     # Langkah 4: Hitung kualitas OCR
     quality = calculate_ocr_quality(cleaned)
+    # Langkah 5: Normalisasi huruf kapital jika diminta
+    if normalize_case:
+        cleaned = normalize_latin_case(cleaned)
 
     return cleaned, quality
 
