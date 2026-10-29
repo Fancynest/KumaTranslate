@@ -173,24 +173,61 @@ def apply_glossary_source(text: str, glossary: Dict[str, str]) -> str:
     return text
 
 
+GENERIC_HALLUCINATION_PATTERNS = [
+    r'tidak tahu apa yang terjadi',
+    r'aku tidak tahu apa',
+    r'saya tidak tahu apa',
+    r'tidak tahu apa yang',
+    r'tidak tahu harus berkata apa',
+    r"i don't know what"
+]
+
+
 def is_hallucinated_short(src: str, tgt: str) -> bool:
     """
     Guard cerdas halusinasi terjemahan pada teks pendek:
-    - core = src tanpa spasi, angka, dan tanda baca; n = len(core).
-    - Jika n == 0 atau n > 3: False (bukan teks pendek yang rentan halusinasi).
-    - Jika core mengandung kanji: True bila kata >= 2n + 4.
-    - Jika core katakana murni: True bila kata >= 3 (khas halusinasi SFX komik).
-    - Selain itu: True bila kata >= 5.
+    - Untuk CJK:
+      core = src tanpa spasi, angka, dan tanda baca; n = len(core).
+      Jika n == 0 atau n > 3: False.
+      Jika core mengandung kanji: True bila kata >= 2n + 4.
+      Jika katakana murni: True bila kata >= 3 (khas halusinasi SFX komik).
+      Selain itu: True bila kata >= 5.
+    - Untuk Latin (Inggris/Barat):
+      src_words = kata dalam sumber (len <= 3).
+      True jika keluaran mengandung frasa halusinasi khas terjemahan mesin,
+      atau jumlah kata membengkak tidak wajar (misal 'I see.' -> 'Aku tidak tahu apa yang terjadi').
     """
     if not src or not tgt:
         return False
 
+    tgt_clean = tgt.strip()
+    words = len(tgt_clean.split())
+    tgt_lower = tgt_clean.lower()
+
+    # Kasus Latin (Inggris / komik Barat tanpa karakter CJK)
+    if not CJK_REGEX.search(src):
+        src_words = re.findall(r'\b[A-Za-z0-9]+\b', src)
+        n_words = len(src_words)
+        if n_words == 0 or n_words > 3:
+            return False
+
+        # Cek frasa halusinasi khas terjemahan mesin pada sumber pendek
+        for pat in GENERIC_HALLUCINATION_PATTERNS:
+            if re.search(pat, tgt_lower):
+                return True
+
+        # Pembengkakan kata tidak wajar pada sumber sangat pendek (<= 3 kata)
+        if n_words <= 2 and words >= 5:
+            return True
+        if n_words == 3 and words >= 7:
+            return True
+        return False
+
+    # Kasus CJK (Jepang / Korea / Mandarin)
     core = PUNCT_AND_DIGITS_REGEX.sub('', src)
     n = len(core)
     if n == 0 or n > 3:
         return False
-
-    words = len(tgt.strip().split())
 
     # Jika mengandung kanji (kata Jepang bermakna padat seperti 大丈夫, 先生)
     if re.search(r'[\u4E00-\u9FFF\u3400-\u4DBF]', core):
@@ -202,6 +239,46 @@ def is_hallucinated_short(src: str, tgt: str) -> bool:
 
     # Pola lainnya (Hiragana murni pendek, dsb.)
     return words >= 5
+
+
+def filter_cross_bubble_hallucinations(pairs: List[Tuple[str, str]]) -> List[str]:
+    """
+    Deteksi halusinasi lintas-balon (mode-collapse detection):
+    Jika string terjemahan yang sama (>= 3 kata) dihasilkan dari
+    dua atau lebih sumber BERBEDA dalam satu chapter/halaman,
+    tandai dan buang hasil terjemahan tersebut (kembalikan string kosong)
+    agar gambar asli pada balon-balon tersebut tidak rusak tertimpa halusinasi.
+    """
+    if not pairs:
+        return []
+
+    tgt_to_sources: Dict[str, Set[str]] = {}
+    for src, tgt in pairs:
+        if not tgt or not tgt.strip():
+            continue
+        tgt_norm = tgt.strip().lower()
+        words = len(tgt.strip().split())
+        if words >= 3:
+            norm_src = re.sub(r'[\s\W_]+', '', src).lower()
+            if tgt_norm not in tgt_to_sources:
+                tgt_to_sources[tgt_norm] = set()
+            if norm_src:
+                tgt_to_sources[tgt_norm].add(norm_src)
+
+    hallucinated_tgts = {
+        tgt_norm for tgt_norm, sources in tgt_to_sources.items()
+        if len(sources) >= 2
+    }
+
+    results: List[str] = []
+    for src, tgt in pairs:
+        if tgt and tgt.strip().lower() in hallucinated_tgts:
+            print(f"[FILTER] Halusinasi lintas-balon dibuang: '{tgt}' dari sumber ganda berbeda.")
+            results.append("")
+        else:
+            results.append(tgt)
+
+    return results
 
 
 def is_strong_name_candidate(cand: Dict[str, Any]) -> bool:

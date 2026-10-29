@@ -35,7 +35,8 @@ from src.text_utils import (
     is_hallucinated_short,
     assess_translation,
     post_process_latin_ocr,
-    calculate_ocr_quality
+    calculate_ocr_quality,
+    filter_cross_bubble_hallucinations
 )
 from pydantic import BaseModel
 
@@ -273,6 +274,9 @@ class TranslationEngine:
                         all_warnings.extend(warns)
                     res_id_texts.append(tgt_enforced)
 
+            # Deteksi halusinasi lintas-balon (mode-collapse: terjemahan >= 3 kata sama dari sumber berbeda)
+            res_id_texts = filter_cross_bubble_hallucinations(list(zip(raw_texts, res_id_texts)))
+
         if target_lang in ["eng_Latn", "both"]:
             raw_en, backend_en = self.translator.translate_page_bubbles(
                 texts=raw_texts,
@@ -294,6 +298,9 @@ class TranslationEngine:
                     if warns:
                         all_warnings.extend(warns)
                     res_en_texts.append(tgt_enforced)
+
+            # Deteksi halusinasi lintas-balon (mode-collapse: terjemahan >= 3 kata sama dari sumber berbeda)
+            res_en_texts = filter_cross_bubble_hallucinations(list(zip(raw_texts, res_en_texts)))
 
         # 4. Inpainting: Hapus teks asli hanya pada balon yang memiliki terjemahan valid
         #    Jika terjemahan kosong / dibuang karena halusinasi, atau ocr_low_quality,

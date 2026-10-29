@@ -17,7 +17,8 @@ from src.text_utils import (
     split_glued_words,
     correct_spelling_latin,
     calculate_ocr_quality,
-    post_process_latin_ocr
+    post_process_latin_ocr,
+    filter_cross_bubble_hallucinations
 )
 from src.translator import MangaTranslator
 
@@ -213,6 +214,37 @@ class TestTextUtils(unittest.TestCase):
         self.assertIn("SIGNATURE", processed)
         self.assertIn("THE BOOK", processed)
         self.assertGreaterEqual(quality, 0.8)
+
+    def test_is_hallucinated_short_latin(self):
+        # Tes wajib user: "I see." tidak boleh menjadi kalimat tentang "tidak tahu apa yang terjadi"
+        self.assertTrue(is_hallucinated_short("I see.", "Aku tidak tahu apa yang terjadi."))
+        self.assertTrue(is_hallucinated_short("I see.", "Saya tidak tahu apa yang sedang terjadi."))
+        
+        # Terjemahan sah untuk teks Latin pendek harus dipertahankan
+        self.assertFalse(is_hallucinated_short("I see.", "Begitu rupanya."))
+        self.assertFalse(is_hallucinated_short("I see.", "Saya mengerti."))
+        self.assertFalse(is_hallucinated_short("Good morning.", "Selamat pagi."))
+        self.assertFalse(is_hallucinated_short("Wait!", "Tunggu sebentar!"))
+        
+        # Pembengkakan kata tidak wajar pada kata tunggal
+        self.assertTrue(is_hallucinated_short("Wait!", "Aku tidak tahu apa yang kamu katakan sekarang"))
+
+    def test_filter_cross_bubble_hallucinations(self):
+        # String >= 3 kata yang sama dari 2 sumber BERBEDA harus dibuang
+        pairs = [
+            ("グリ…", "Aku tidak tahu apa yang terjadi."),
+            ("ドン！", "Aku tidak tahu apa yang terjadi."),
+            ("はい", "Tentu saja."),
+            ("はい", "Tentu saja."),
+            ("こんにちは", "Halo semuanya apa kabar?")
+        ]
+        filtered = filter_cross_bubble_hallucinations(pairs)
+        self.assertEqual(filtered[0], "")
+        self.assertEqual(filtered[1], "")
+        # Sumber sama (dialogue berulang sah) dipertahankan
+        self.assertEqual(filtered[2], "Tentu saja.")
+        self.assertEqual(filtered[3], "Tentu saja.")
+        self.assertEqual(filtered[4], "Halo semuanya apa kabar?")
 
 
 class TestMockTranslateBatch(unittest.TestCase):
