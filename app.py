@@ -122,25 +122,38 @@ class TranslationEngine:
         if target_lang in ["eng_Latn", "both"]:
             res_en_texts = self.translator.translate_batch(raw_texts, src_lang=page_lang, tgt_lang="eng_Latn")
 
-        # 4. Inpainting: Menggunakan bounds bubble_bbox dan bubble_mask (sesuai urutan 4)
-        bubble_bboxes = [b.get("bubble_bbox", b["bbox"]) for b in valid_bubbles]
-        bubble_masks = [b.get("bubble_mask") for b in valid_bubbles]
-        cleaned_img = self.inpainter.clean_bubbles(img, bubble_bboxes, masks=bubble_masks)
+        # 4. Inpainting: Bersihkan teks asli
+        #    - text_bubble: bersihkan goresan teks di seluruh rongga balon kata (bubble_bbox + bubble_mask)
+        #      sehingga tidak ada goresan kana/kanji yang tertinggal meskipun ada baris yang terlewat.
+        #    - free_text: bersihkan hanya di area text_bbox agar tidak merusak artwork sekitar.
+        inpaint_boxes = []
+        inpaint_masks = []
+        for b in valid_bubbles:
+            if b.get("type") == "text_bubble":
+                inpaint_boxes.append(b.get("bubble_bbox", b["bbox"]))
+                inpaint_masks.append(b.get("bubble_mask"))
+            else:
+                inpaint_boxes.append(b.get("text_bbox", b["bbox"]))
+                inpaint_masks.append(b.get("bubble_mask"))
 
-        # 5. Typesetting: ke dalam safe bubble_bbox dengan garansi strict fitting
+        cleaned_img = self.inpainter.clean_bubbles(img, inpaint_boxes, masks=inpaint_masks)
+
+        # 5. Typesetting: Render teks terjemahan ke dalam safe_bbox (rongga dalam balon kata)
+        #    Teks terjemahan horizontal (Indonesia / Inggris) membutuhkan ruang lebar balon kata.
+        #    Renderer strict fitting menjamin teks 100% terkunci rapi di dalam rongga tanpa meluber keluar.
         output_images = {}
         if target_lang in ["ind_Latn", "both"]:
             img_id = cleaned_img.copy()
             for b, t in zip(valid_bubbles, res_id_texts):
-                target_box = b.get("bubble_bbox", b["bbox"])
-                img_id = self.renderer.render_bubble_text(img_id, target_box, t)
+                render_box = b.get("safe_bbox", b.get("bubble_bbox", b["bbox"]))
+                img_id = self.renderer.render_bubble_text(img_id, render_box, t)
             output_images["ind_Latn"] = img_id
 
         if target_lang in ["eng_Latn", "both"]:
             img_en = cleaned_img.copy()
             for b, t in zip(valid_bubbles, res_en_texts):
-                target_box = b.get("bubble_bbox", b["bbox"])
-                img_en = self.renderer.render_bubble_text(img_en, target_box, t)
+                render_box = b.get("safe_bbox", b.get("bubble_bbox", b["bbox"]))
+                img_en = self.renderer.render_bubble_text(img_en, render_box, t)
             output_images["eng_Latn"] = img_en
 
         return {
