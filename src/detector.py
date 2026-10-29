@@ -348,9 +348,8 @@ class BubbleDetector:
             thresh = max(130, int(bg_bright - 35))
             bright_mask = (roi_gray >= thresh).astype(np.uint8) * 255
 
-            # Kernel proporsional terhadap font_size
-            k_open = max(3, int(f_size * 0.30)) | 1
-            kernel_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_open, k_open))
+            # Kernel minimal 3x3 agar memutus ekor tipis tanpa merusak sudut kotak narasi atau balon runcing/screaming
+            kernel_open = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
             bright_opened = cv2.morphologyEx(bright_mask, cv2.MORPH_OPEN, kernel_open)
 
             num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(bright_opened)
@@ -378,8 +377,7 @@ class BubbleDetector:
                 bubble_comp = (labels == best_label).astype(np.uint8) * 255
                 bubble_comp = cv2.morphologyEx(bubble_comp, cv2.MORPH_DILATE, kernel_open)
                 bubble_comp = cv2.bitwise_and(bubble_comp, bright_mask)
-                k_close = max(5, int(f_size * 0.40)) | 1
-                kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_close, k_close))
+                kernel_close = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
                 bubble_comp = cv2.morphologyEx(bubble_comp, cv2.MORPH_CLOSE, kernel_close)
                 # Isi lubang interior (goresan teks gelap) di dalam balon
                 contours, _ = cv2.findContours(bubble_comp, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -415,13 +413,15 @@ class BubbleDetector:
             mask_full[ty:ty+th, tx:tx+tw] = 255
             return mask_full, text_bbox
 
-        # Guard kebocoran: cek apakah komponen menyentuh batas internal ROI
-        touches_internal_edge = (
-            (rx1 > 0 and np.any(bubble_roi[:, 0] > 0)) or
-            (rx2 < w_img and np.any(bubble_roi[:, -1] > 0)) or
-            (ry1 > 0 and np.any(bubble_roi[0, :] > 0)) or
-            (ry2 < h_img and np.any(bubble_roi[-1, :] > 0))
-        )
+        touches_internal_edge = False
+        if roi_bbox is None:
+            # Guard kebocoran hanya berlaku pada mode heuristik tanpa pembatas YOLO
+            touches_internal_edge = (
+                (rx1 > 0 and np.any(bubble_roi[:, 0] > 0)) or
+                (rx2 < w_img and np.any(bubble_roi[:, -1] > 0)) or
+                (ry1 > 0 and np.any(bubble_roi[0, :] > 0)) or
+                (ry2 < h_img and np.any(bubble_roi[-1, :] > 0))
+            )
 
         if touches_internal_edge:
             # Percobaan 2: Perbesar ROI bertahap
@@ -690,7 +690,21 @@ class BubbleDetector:
         bubbles = []
         for b_idx, yb in enumerate(yolo_bubbles):
             bx, by, bw, bh = yb
-            assigned_texts = bubble_texts[b_idx]
+            assigned_texts = list(bubble_texts[b_idx])
+
+            # Deteksi teks presisi pada potongan (crop) balon untuk menangkap baris kecil/vertikal yang terlewat pada skala penuh
+            bubble_crop = img_rgb[by:by+bh, bx:bx+bw]
+            crop_dt_boxes, _ = self.engine.text_det(bubble_crop)
+            if crop_dt_boxes is not None and len(crop_dt_boxes) > 0:
+                for b in crop_dt_boxes:
+                    xs = [pt[0] for pt in b]
+                    ys = [pt[1] for pt in b]
+                    cbx = int(max(0, min(xs)))
+                    cby = int(max(0, min(ys)))
+                    cbw = int(max(xs) - min(xs))
+                    cbh = int(max(ys) - min(ys))
+                    if cbw >= 4 and cbh >= 4:
+                        assigned_texts.append((bx + cbx, by + cby, cbw, cbh))
 
             if assigned_texts:
                 # Gabungkan baris teks di dalam balon menjadi satu text_bbox

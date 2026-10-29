@@ -173,10 +173,12 @@ class MangaTranslator:
         self,
         texts: List[str],
         src_lang: Optional[str] = None,
-        tgt_lang: Optional[str] = None
+        tgt_lang: Optional[str] = None,
+        glossary: Optional[Dict[str, str]] = None
     ) -> List[str]:
         """
         Menerjemahkan BANYAK kalimat sekaligus dalam 1 panggilan GPU (Batch Processing).
+        Mendukung pra-substitusi glosarium istilah dan nama diri agar tidak diterjemahkan harafiah.
         """
         if not texts:
             return []
@@ -187,14 +189,19 @@ class MangaTranslator:
         if source == target:
             return texts
 
-        # Bersihkan teks input
+        # Bersihkan teks input dan terapkan pra-substitusi glosarium
         valid_indices = []
         sub_texts = []
         for i, t in enumerate(texts):
             # Jika hanya titik-titik atau tanda seru, tidak perlu ke model
             if t and t.strip():
                 valid_indices.append(i)
-                sub_texts.append(t.strip())
+                cleaned_input = t.strip()
+                if glossary:
+                    for s_term, t_term in sorted(glossary.items(), key=lambda x: len(x[0]), reverse=True):
+                        if s_term in cleaned_input:
+                            cleaned_input = cleaned_input.replace(s_term, t_term)
+                sub_texts.append(cleaned_input)
 
         if not valid_indices:
             return texts
@@ -272,7 +279,7 @@ class MangaTranslator:
                 logger.warning(warn_msg)
 
         # Fallback ke NLLB-200 batch translator
-        nllb_results = self.translate_batch(texts, src_lang=src_lang, tgt_lang=tgt_lang)
+        nllb_results = self.translate_batch(texts, src_lang=src_lang, tgt_lang=tgt_lang, glossary=glossary)
         return nllb_results, "nllb"
 
     def translate(self, text: str, src_lang: Optional[str] = None, tgt_lang: Optional[str] = None) -> str:

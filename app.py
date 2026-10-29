@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 
-PUNCT_REGEX = re.compile(r'[\s\d' + re.escape(string.punctuation) + r'、。！？…・～〜「」『』（）()【】[\]―ー\-–—.,:;!?\'"“”‘’]+')
+PUNCT_REGEX = re.compile(r'[\s\d' + re.escape(string.punctuation) + r'、。！？…・～〜「」『』（）()【】[\]―ー\-–—.,:;!?\'"“”‘’．，]+')
 
 # Setup encoding
 if sys.platform == "win32":
@@ -174,6 +174,20 @@ class TranslationEngine:
             active_glossary = self.glossary_mgr.load_glossary(series_id)
         if translation_memory:
             active_glossary.update(translation_memory.glossary)
+
+        # Ekstraksi otomatis kandidat nama diri & istilah Katakana agar tidak diterjemahkan harafiah
+        if page_lang == "jpn_Jpan":
+            try:
+                extracted_names = self.name_extractor.extract_candidates([raw_texts])
+                for cand in extracted_names:
+                    term = cand.get("term")
+                    sugg = cand.get("suggested_translation")
+                    if term and sugg and term not in active_glossary:
+                        active_glossary[term] = sugg
+                        if translation_memory:
+                            translation_memory.set_term(term, sugg)
+            except Exception as e:
+                print(f"[GLOSSARY] Info: ekstraksi nama otomatis dilewati: {e}")
 
         if target_lang in ["ind_Latn", "both"]:
             raw_id, backend_id = self.translator.translate_page_bubbles(

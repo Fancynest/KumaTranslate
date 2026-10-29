@@ -26,7 +26,31 @@ HONORIFIC_PATTERN = re.compile(
     r'([^\s\d、。！？…・「」『』（）()]+?)(?:' + '|'.join(re.escape(h) for h in ALL_HONORIFICS) + r')(?=[\s、。！？…・「」『』（）()]|$)'
 )
 
+# Pola pengenalan / panggilan tokoh (misal: "こいつは サラダ", "あいつは ボルト", "名前は...")
+INTRO_PATTERN = re.compile(
+    r'(?:こいつは|あいつは|そいつは|やつは|奴は|彼は|彼女は|名前は|お前は|貴様は|あんたは|きみは|君は)\s*([^\s\d、。！？…・「」『』（）()．，]+)'
+)
+
 JP_PARTICLES = re.compile(r'^[はがをにへでとからもやの]+')
+
+def romanize_japanese_name(text: str) -> str:
+    """
+    Mengonversi nama atau istilah Katakana/Hiragana ke Romaji fonetik standar (Hepburn).
+    Secara generik dan otomatis tanpa perlu hardcode nama tokoh.
+    Contoh: サラダ -> Sarada, ボルト -> Boruto, サスケ -> Sasuke, ヒマワリ -> Himawari
+    """
+    if not text:
+        return ""
+    try:
+        import jaconv
+        hira = jaconv.kata2hira(text)
+        rom = jaconv.kana2alphabet(hira)
+        # Tangani konsonan ganda sokuon (xtsu)
+        rom = re.sub(r'xtsu([ksthmyrwgzdbpj])', r'\1\1', rom)
+        rom = re.sub(r'xtsu', '', rom)
+        return rom.capitalize()
+    except Exception:
+        return text
 
 class GlossaryManager:
     """
@@ -148,7 +172,7 @@ class NameCandidateExtractor:
                                         "score": 0.0,
                                         "reasons": set(),
                                         "pages": set(),
-                                        "suggested": surface
+                                        "suggested": romanize_japanese_name(surface)
                                     }
                                 candidates[surface]["score"] += 3.5
                                 candidates[surface]["reasons"].add("proper_noun")
@@ -176,13 +200,30 @@ class NameCandidateExtractor:
                                 "score": 0.0,
                                 "reasons": set(),
                                 "pages": set(),
-                                "suggested": name_tok
+                                "suggested": romanize_japanese_name(name_tok)
                             }
                         candidates[name_tok]["score"] += 4.0
                         candidates[name_tok]["reasons"].add("before_honorific")
                         candidates[name_tok]["pages"].add(page_idx + 1)
 
-                # 3. Katakana yang berulang
+                # 3. Pola pengenalan / panggilan tokoh (misal "こいつは サラダ", "あいつは ボルト")
+                for match in INTRO_PATTERN.finditer(text):
+                    intro_tok = match.group(1).strip()
+                    intro_tok = JP_PARTICLES.sub('', intro_tok)
+                    if 2 <= len(intro_tok) <= 8:
+                        if intro_tok not in candidates:
+                            candidates[intro_tok] = {
+                                "term": intro_tok,
+                                "score": 0.0,
+                                "reasons": set(),
+                                "pages": set(),
+                                "suggested": romanize_japanese_name(intro_tok)
+                            }
+                        candidates[intro_tok]["score"] += 4.5
+                        candidates[intro_tok]["reasons"].add("introduced_character")
+                        candidates[intro_tok]["pages"].add(page_idx + 1)
+
+                # 4. Katakana di dalam dialog
                 for kata in KATAKANA_REGEX.findall(text):
                     if len(kata) >= 2:
                         if kata not in candidates:
@@ -191,14 +232,14 @@ class NameCandidateExtractor:
                                 "score": 0.0,
                                 "reasons": set(),
                                 "pages": set(),
-                                "suggested": kata
+                                "suggested": romanize_japanese_name(kata)
                             }
-                        candidates[kata]["score"] += 1.5
+                        candidates[kata]["score"] += 2.0
                         candidates[kata]["reasons"].add("katakana")
                         candidates[kata]["pages"].add(page_idx + 1)
                         page_seen_katakana.add(kata)
 
-        # 4. Berikan bonus frekuensi lintas halaman
+        # 5. Berikan bonus frekuensi lintas halaman
         results = []
         for term, data in candidates.items():
             num_pages = len(data["pages"])
@@ -206,14 +247,14 @@ class NameCandidateExtractor:
                 data["score"] += float(num_pages) * 1.5
                 data["reasons"].add(f"multi_page({num_pages})")
 
-            # Filter kandidat dengan skor minimal
-            if data["score"] >= 3.0:
+            # Filter kandidat dengan skor minimal (>= 2.0 untuk katakana nama diri)
+            if data["score"] >= 2.0:
                 results.append({
                     "term": data["term"],
                     "score": round(data["score"], 1),
                     "reasons": sorted(list(data["reasons"])),
                     "pages": sorted(list(data["pages"])),
-                    "auto_accept": data["score"] >= 5.5,
+                    "auto_accept": data["score"] >= 4.0,
                     "suggested_translation": data["suggested"]
                 })
 

@@ -64,11 +64,12 @@ class MangaRenderer:
         bbox: Tuple[int, int, int, int],
         mask: Optional[np.ndarray] = None,
         max_font: int = 34,
-        min_font: int = 6
+        min_font: int = 12
     ) -> Tuple[ImageFont.FreeTypeFont, List[str], List[Tuple[int, int]], int]:
         """
         Menghitung ukuran font maksimal dan layout baris teks adaptif.
-        Jika bubble_mask diberikan, lebar tiap baris dihitung dari kontur oval balon kata.
+        Menyesuaikan kontur alami balon kata (oval, persegi, atau gerigi screaming)
+        dengan penempatan teks terpusat secara vertikal dan verifikasi lebar irisan per baris.
         """
         bx, by, bw, bh = bbox
         words = text.split()
@@ -84,8 +85,32 @@ class MangaRenderer:
         # Erode mask setebal outline (3px) agar teks terjamin tidak menyentuh outline
         eroded_mask = None
         if mask is not None and np.any(mask > 0):
-            k_erode = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+            k_erode = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
             eroded_mask = cv2.erode((mask > 0).astype(np.uint8), k_erode, iterations=1)
+
+        def get_line_span(y1: int, y2: int) -> Tuple[int, int]:
+            if eroded_mask is None:
+                return rect_w, bx + bw // 2
+            h_m, w_m = eroded_mask.shape
+            cy1 = max(0, min(h_m - 1, int(y1)))
+            cy2 = max(0, min(h_m, int(y2)))
+            if cy2 <= cy1:
+                return rect_w, bx + bw // 2
+            slice_rows = eroded_mask[cy1:cy2, :]
+            min_span = 999999
+            best_cx = bx + bw // 2
+            valid = 0
+            for r in range(slice_rows.shape[0]):
+                pts = np.where(slice_rows[r] > 0)[0]
+                if len(pts) > 0:
+                    span = pts[-1] - pts[0]
+                    if span < min_span:
+                        min_span = span
+                        best_cx = (pts[0] + pts[-1]) // 2
+                    valid += 1
+            if valid == 0 or min_span == 999999 or min_span < 12:
+                return rect_w, bx + bw // 2
+            return max(10, min_span - 6), best_cx
 
         for size in range(max_font, min_font - 1, -1):
             try:
@@ -97,43 +122,21 @@ class MangaRenderer:
             sample_bbox = draw.textbbox((0, 0), "Ag", font=font)
             line_h = sample_bbox[3] - sample_bbox[1]
 
-            # 1. Coba word wrap baris demi baris
+            # 1. Word wrap awal berdasarkan lebar nominal safe area
             lines = []
             cur_line = []
-            fits = True
-
-            # Estimasi awal pembagian baris
             for w in words:
                 cand = " ".join(cur_line + [w])
                 w_bb = draw.textbbox((0, 0), cand, font=font)
-                cand_w = w_bb[2] - w_bb[0]
-
-                # Perkirakan posisi baris saat ini
-                est_line_idx = len(lines)
-                est_y_top = by + est_line_idx * (line_h + spacing)
-                est_y_bot = est_y_top + line_h
-
-                if eroded_mask is not None:
-                    avail_w, _ = self._compute_line_width_from_mask(eroded_mask, est_y_top, est_y_bot, margin=3)
-                    if avail_w <= 0:
-                        avail_w = rect_w
-                else:
-                    avail_w = rect_w
-
-                if cand_w <= avail_w:
+                if (w_bb[2] - w_bb[0]) <= rect_w:
                     cur_line.append(w)
                 else:
                     if cur_line:
                         lines.append(" ".join(cur_line))
                         cur_line = [w]
                     else:
-                        # Kata tunggal lebih lebar dari ruang baris
-                        fits = False
-                        break
-
-            if not fits:
-                continue
-
+                        lines.append(w)
+                        cur_line = []
             if cur_line:
                 lines.append(" ".join(cur_line))
 
@@ -141,10 +144,10 @@ class MangaRenderer:
             if total_h > rect_h:
                 continue
 
-            # 2. Verifikasi ulang posisi vertikal dan batas horizontal tiap baris
+            # 2. Verifikasi posisi vertikal terpusat terhadap kontur mask asli
             start_y = by + max(0, (bh - total_h) // 2)
             line_positions = []
-            verified = True
+            all_lines_fit = True
 
             for idx, line in enumerate(lines):
                 l_bb = draw.textbbox((0, 0), line, font=font)
@@ -152,49 +155,41 @@ class MangaRenderer:
                 y_top = start_y + idx * (line_h + spacing)
                 y_bot = y_top + line_h
 
-                if eroded_mask is not None:
-                    avail_w, cx = self._compute_line_width_from_mask(eroded_mask, y_top, y_bot, margin=3)
-                    if avail_w > 0 and lw <= avail_w:
-                        cur_x = cx - (lw // 2)
-                    elif lw <= rect_w:
-                        cur_x = bx + max(0, (bw - lw) // 2)
-                    else:
-                        verified = False
-                        break
+                avail_w, cx = get_line_span(y_top, y_bot)
+                if lw <= avail_w:
+                    lx = cx - (lw // 2)
+                elif lw <= rect_w:
+                    lx = bx + (bw - lw) // 2
                 else:
-                    if lw <= rect_w:
-                        cur_x = bx + max(0, (bw - lw) // 2)
-                    else:
-                        verified = False
-                        break
+                    all_lines_fit = False
+                    break
+                line_positions.append((lx, y_top))
 
-                line_positions.append((cur_x, y_top))
-
-            if verified:
+            if all_lines_fit:
                 return font, lines, line_positions, spacing
 
-        # Fallback ukuran terkecil
+        # Fallback pada ukuran font minimum yang tetap terbaca jelas (>= 11-12px)
         font = ImageFont.truetype(self.font_path, min_font)
         spacing = 1
         sample_bbox = draw.textbbox((0, 0), "Ag", font=font)
         line_h = sample_bbox[3] - sample_bbox[1]
 
         lines = []
-        cur_line = ""
-        for char in text:
-            test = cur_line + char
-            tb = draw.textbbox((0, 0), test, font=font)
-            if (tb[2] - tb[0]) <= rect_w:
-                cur_line = test
+        cur_line = []
+        for w in words:
+            cand = " ".join(cur_line + [w])
+            w_bb = draw.textbbox((0, 0), cand, font=font)
+            if (w_bb[2] - w_bb[0]) <= rect_w:
+                cur_line.append(w)
             else:
                 if cur_line:
-                    lines.append(cur_line)
-                    cur_line = char
+                    lines.append(" ".join(cur_line))
+                    cur_line = [w]
                 else:
-                    lines.append(char)
-                    cur_line = ""
+                    lines.append(w)
+                    cur_line = []
         if cur_line:
-            lines.append(cur_line)
+            lines.append(" ".join(cur_line))
 
         total_h = len(lines) * line_h + (len(lines) - 1) * spacing
         start_y = by + max(0, (bh - total_h) // 2)
@@ -202,9 +197,10 @@ class MangaRenderer:
         for idx, line in enumerate(lines):
             l_bb = draw.textbbox((0, 0), line, font=font)
             lw = l_bb[2] - l_bb[0]
-            cur_x = bx + max(0, (bw - lw) // 2)
-            cur_y = start_y + idx * (line_h + spacing)
-            line_positions.append((cur_x, cur_y))
+            y_top = start_y + idx * (line_h + spacing)
+            avail_w, cx = get_line_span(y_top, y_top + line_h)
+            lx = cx - (lw // 2) if lw <= avail_w else bx + max(0, (bw - lw) // 2)
+            line_positions.append((lx, y_top))
 
         return font, lines, line_positions, spacing
 
@@ -230,9 +226,9 @@ class MangaRenderer:
         draw = ImageDraw.Draw(img_out)
         bx, by, bw, bh = bbox
 
-        # Batas maksimal font proporsional ukuran balon (hingga 34px)
-        max_font = max(10, min(34, int(bh * 0.38)))
-        min_font = 6
+        # Batas maksimal dan minimal font proporsional ukuran balon (min 11-12px)
+        max_font = max(14, min(34, int(bh * 0.38)))
+        min_font = max(11, min(14, int(min(bw, bh) * 0.12)))
 
         font, lines, line_positions, spacing = self._fit_text_adaptive(
             draw, clean_text, bbox, mask=bubble_mask, max_font=max_font, min_font=min_font
