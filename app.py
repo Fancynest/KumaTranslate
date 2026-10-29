@@ -29,6 +29,12 @@ from src.inpainter import MangaInpainter
 from src.renderer import MangaRenderer
 from src.document_processor import DocumentProcessor
 from src.glossary import GlossaryManager, NameCandidateExtractor, ChapterTranslationMemory
+from src.text_utils import (
+    normalize_ocr_text,
+    is_strong_name_candidate,
+    is_hallucinated_short,
+    assess_translation
+)
 from pydantic import BaseModel
 
 app = FastAPI(title="Manga Translator AI Local", version="2.6.0")
@@ -128,7 +134,7 @@ class TranslationEngine:
 
             raw = self.ocr.read_text(b["crop"], lang_hint=doc_lang_hint)
             if raw and raw.strip():
-                t_clean = raw.strip()
+                t_clean = normalize_ocr_text(raw)
                 # Lewati teks yang setelah dibuang spasi dan tanda baca kurang dari 2 karakter
                 clean_no_punct = PUNCT_REGEX.sub("", t_clean)
                 if len(clean_no_punct) < 2:
@@ -180,6 +186,9 @@ class TranslationEngine:
             try:
                 extracted_names = self.name_extractor.extract_candidates([raw_texts])
                 for cand in extracted_names:
+                    # Lewati kandidat yang bukan is_strong_name_candidate (kandidat lemah hanya tampil di UI untuk konfirmasi)
+                    if not is_strong_name_candidate(cand):
+                        continue
                     term = cand.get("term")
                     sugg = cand.get("suggested_translation")
                     if term and sugg and term not in active_glossary:
@@ -200,12 +209,10 @@ class TranslationEngine:
             )
             used_backends["ind_Latn"] = backend_id
 
-            # Guard halusinasi: jika sumber <= 3 karakter dan keluaran >= 3 kata, buang
+            # Guard cerdas halusinasi pada teks pendek
             for src, tgt in zip(raw_texts, raw_id):
-                clean_src = PUNCT_REGEX.sub("", src)
-                words = [w for w in tgt.strip().split() if w]
-                if len(clean_src) <= 3 and len(words) >= 3:
-                    print(f"[FILTER] Guard halusinasi membuang: '{src}' ({len(clean_src)}c) -> '{tgt}' ({len(words)}w)")
+                if is_hallucinated_short(src, tgt):
+                    print(f"[FILTER] Guard halusinasi membuang: '{src}' -> '{tgt}'")
                     res_id_texts.append("")
                 else:
                     tgt_enforced, warns = self.glossary_mgr.post_check_and_enforce(src, tgt, active_glossary)
@@ -225,10 +232,8 @@ class TranslationEngine:
             used_backends["eng_Latn"] = backend_en
 
             for src, tgt in zip(raw_texts, raw_en):
-                clean_src = PUNCT_REGEX.sub("", src)
-                words = [w for w in tgt.strip().split() if w]
-                if len(clean_src) <= 3 and len(words) >= 3:
-                    print(f"[FILTER] Guard halusinasi membuang: '{src}' ({len(clean_src)}c) -> '{tgt}' ({len(words)}w)")
+                if is_hallucinated_short(src, tgt):
+                    print(f"[FILTER] Guard halusinasi membuang: '{src}' -> '{tgt}'")
                     res_en_texts.append("")
                 else:
                     tgt_enforced, warns = self.glossary_mgr.post_check_and_enforce(src, tgt, active_glossary)
@@ -282,16 +287,21 @@ class TranslationEngine:
         for idx, b in enumerate(valid_bubbles):
             t_id = res_id_texts[idx] if idx < len(res_id_texts) else ""
             t_en = res_en_texts[idx] if idx < len(res_en_texts) else ""
+            s_text = raw_texts[idx] if idx < len(raw_texts) else ""
             debug_dump["bubbles"].append({
                 "bubble_id": idx + 1,
                 "bbox": list(b.get("safe_bbox", b.get("bubble_bbox", b.get("bbox")))),
                 "text_bbox": list(b.get("text_bbox", b.get("bbox"))),
                 "type": b.get("type", "text_bubble"),
                 "source": b.get("source", "heuristic"),
-                "ocr_text": raw_texts[idx] if idx < len(raw_texts) else "",
+                "ocr_text": s_text,
                 "translation": {
                     "ind_Latn": t_id,
                     "eng_Latn": t_en
+                },
+                "quality_flags": {
+                    "ind_Latn": assess_translation(s_text, t_id),
+                    "eng_Latn": assess_translation(s_text, t_en)
                 }
             })
 
