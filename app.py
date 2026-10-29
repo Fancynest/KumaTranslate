@@ -36,7 +36,8 @@ from src.text_utils import (
     assess_translation,
     post_process_latin_ocr,
     calculate_ocr_quality,
-    filter_cross_bubble_hallucinations
+    filter_cross_bubble_hallucinations,
+    CJK_REGEX
 )
 from pydantic import BaseModel
 
