@@ -40,6 +40,13 @@
 pip install -r requirements.txt
 ```
 
+#### Opsional: Detektor Balon Kata YOLOv8 (Akurasi Tinggi)
+Untuk mengaktifkan model deteksi balon kata terlatih (`ogkalu/comic-speech-bubble-detector-yolov8m`):
+```bash
+pip install -r requirements-yolo.txt
+```
+*Catatan: Jika `ultralytics` tidak diinstal atau koneksi internet tidak tersedia saat pertama kali unduh model, KumaTranslate secara otomatis menggunakan detektor heuristik bawaan (fallback) tanpa error.*
+
 ---
 
 ## 🚀 Cara Menjalankan
@@ -83,4 +90,12 @@ python main.py --image input/sample_manga_page.png --lang ind_Latn
 ---
 
 ## 📄 Lisensi
-MIT License
+
+- **KumaTranslate Core Codebase**: Berlisensi [MIT](LICENSE).
+- **Detektor Balon YOLOv8 (Opsional)**:
+  - Library `ultralytics` berlisensi **AGPL-3.0**. Disediakan sebagai dependency opsional di `requirements-yolo.txt` agar tidak mencemari lisensi MIT kode utama.
+  - Bobot model `ogkalu/comic-speech-bubble-detector-yolov8m` berlisensi **Apache-2.0**.
+- Model OCR & Translator bawaan:
+  - `kha-white/manga-ocr-base`: Apache-2.0.
+  - `facebook/nllb-200-distilled-600M`: CC-BY-NC-4.0.
+  - `PaddleOCR / RapidOCR`: Apache-2.0.

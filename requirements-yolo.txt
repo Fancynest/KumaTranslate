@@ -1,0 +1,7 @@
+# Optional YOLOv8 speech bubble detector dependencies
+# Note: The ultralytics library is licensed under AGPL-3.0.
+# The core KumaTranslate project is licensed under MIT.
+# When ultralytics is not installed, KumaTranslate automatically
+# falls back to the built-in MIT-compatible heuristic detector.
+ultralytics>=8.0.0
+huggingface_hub>=0.20.0
