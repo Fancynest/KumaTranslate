@@ -64,6 +64,14 @@ def run_evaluation(
         def ocr_func(img_np):
             res, _ = engine(img_np)
             return " ".join([x[1] for x in res]).strip() if res else ""
+    elif engine_name == "rapid_en":
+        from rapidocr_onnxruntime import RapidOCR
+        rec_model = "models/rapidocr_en/en_PP-OCRv3_rec_infer.onnx"
+        rec_keys = "models/rapidocr_en/en_dict.txt"
+        engine = RapidOCR(rec_model_path=rec_model, rec_keys_path=rec_keys)
+        def ocr_func(img_np):
+            res, _ = engine(img_np)
+            return " ".join([x[1] for x in res]).strip() if res else ""
     elif engine_name == "easy":
         import easyocr
         reader = easyocr.Reader(['en'], gpu=True)

@@ -25,6 +25,11 @@ scratch/
 .DS_Store
 Thumbs.db
 
+# Large Model weights
+*.onnx
+*.pt
+models/rapidocr_en/*.onnx
+
 # HuggingFace & Torch cache
 .cache/
 *.log

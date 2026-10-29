@@ -24,6 +24,38 @@ class MultiLingualOCR:
         # 2. Engine untuk Inggris & Mandarin (Cepat & akurat via ONNX)
         self.rapid_ocr = RapidOCR()
 
+        # Engine khusus teks Latin/Inggris dengan model rec PP-OCRv3 English
+        self.rapid_ocr_en = None
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        models_dir = os.path.join(base_dir, "models", "rapidocr_en")
+        rec_model = os.path.join(models_dir, "en_PP-OCRv3_rec_infer.onnx")
+        rec_keys = os.path.join(models_dir, "en_dict.txt")
+
+        if not (os.path.exists(rec_model) and os.path.exists(rec_keys)):
+            try:
+                os.makedirs(models_dir, exist_ok=True)
+                import requests
+                if not os.path.exists(rec_model):
+                    print("[OCR] Mengunduh model pengenalan teks Latin (en_PP-OCRv3_rec)...")
+                    r_m = requests.get("https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv3/en_PP-OCRv3_rec_infer.onnx", timeout=30)
+                    if r_m.status_code == 200:
+                        with open(rec_model, "wb") as f:
+                            f.write(r_m.content)
+                if not os.path.exists(rec_keys):
+                    r_k = requests.get("https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/main/ppocr/utils/en_dict.txt", timeout=15)
+                    if r_k.status_code == 200:
+                        with open(rec_keys, "w", encoding="utf-8") as f:
+                            f.write(r_k.text)
+            except Exception as e:
+                print(f"[OCR] Info: pengunduhan otomatis model Latin gagal ({e}), menggunakan engine default.")
+
+        if os.path.exists(rec_model) and os.path.exists(rec_keys):
+            try:
+                self.rapid_ocr_en = RapidOCR(rec_model_path=rec_model, rec_keys_path=rec_keys)
+                print("[OCR] Engine RapidOCR English (PP-OCRv3 Latin) aktif.")
+            except Exception as e:
+                print(f"[OCR] Info: Gagal memuat model RapidOCR English ({e}), fallback ke default.")
+
         # 3. Engine Korea (Lazy loaded agar hemat RAM/VRAM)
         self._korean_ocr = None
         print("[OCR] Engine OCR Multi-Bahasa siap digunakan.")
@@ -56,7 +88,11 @@ class MultiLingualOCR:
             reader = self._get_korean_ocr()
             results = reader.readtext(img_np, detail=0)
             return " ".join(results).strip()
-        elif lang_hint in ["eng_Latn", "en", "zho_Hans", "zh"]:
+        elif lang_hint in ["eng_Latn", "en"]:
+            engine = self.rapid_ocr_en or self.rapid_ocr
+            res, _ = engine(img_np)
+            return " ".join([item[1] for item in res]).strip() if res else ""
+        elif lang_hint in ["zho_Hans", "zh"]:
             res, _ = self.rapid_ocr(img_np)
             return " ".join([item[1] for item in res]).strip() if res else ""
 
@@ -71,7 +107,8 @@ class MultiLingualOCR:
             return manga_text
 
         # 2. Cek RapidOCR untuk Teks Latin (Inggris) atau Hanzi Mandarin (Manhua)
-        rapid_res, _ = self.rapid_ocr(img_np)
+        engine_lat = self.rapid_ocr_en or self.rapid_ocr
+        rapid_res, _ = engine_lat(img_np)
         if rapid_res:
             rapid_text = " ".join([item[1] for item in rapid_res]).strip()
             # Jika mengandung karakter Hanzi Mandarin atau kata Latin (Inggris)
