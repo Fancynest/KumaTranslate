@@ -44,13 +44,17 @@ class MangaTranslator:
         # Bersihkan prefix halusinasi
         prefixes = [
             "bahasa inggris:", "bahasa indonesia:", "bahasa jepang:",
-            "english:", "indonesian:", "japanese:",
-            "terjemahan:", "translation:"
+            "bahasa melayu:", "bahasa arab:", "bahasa mandarin:",
+            "english:", "indonesian:", "japanese:", "chinese:",
+            "terjemahan:", "translation:", "translated:",
+            "in english:", "in indonesian:",
+            "artinya:", "meaning:",
         ]
         lower_clean = clean.lower()
         for p in prefixes:
             if lower_clean.startswith(p):
                 clean = clean[len(p):].strip()
+                lower_clean = clean.lower()
                 break
 
         # Bersihkan tanda kutip luar jika model membungkus kalimat dengan quotes

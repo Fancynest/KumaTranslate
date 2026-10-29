@@ -5,14 +5,15 @@ from typing import List, Tuple
 class MangaRenderer:
     def __init__(self, font_path: str = "C:\\Windows\\Fonts\\comicbd.ttf"):
         """
-        Renderer Tipografi Komik Profesional Bergaransi Presisi:
-        - Strict Fitting: Dijamin 100% teks TIDAK AKAN PERNAH keluar dari garis balon kata
-        - Auto-fit cerdas: Menghitung line width & total height secara ketat dengan inner padding 15%
-        - Word wrapping adaptif dengan fallback ukuran font proporsional
-        - Transparan tanpa background kotak, dengan outline stroke putih halus
+        Renderer teks komik:
+        - Teks dijamin muat di dalam area teks asli (text_bbox)
+        - Auto-fit ukuran font dan word wrapping
+        - Tanpa background kotak, dengan stroke putih tipis agar terbaca di atas sisa artwork
         """
         if not os.path.exists(font_path):
             font_path = "C:\\Windows\\Fonts\\arialbd.ttf"
+        if not os.path.exists(font_path):
+            font_path = "C:\\Windows\\Fonts\\arial.ttf"
         self.font_path = font_path
 
     def _fit_text_to_box(
@@ -25,7 +26,7 @@ class MangaRenderer:
         min_font: int = 4
     ) -> Tuple[ImageFont.FreeTypeFont, List[str], int]:
         """
-        Mencari ukuran font dan pembagian baris yang 100% dijamin muat di dalam target_w dan target_h.
+        Cari ukuran font dan pembagian baris yang muat di dalam target_w x target_h.
         """
         words = text.split()
         if not words:
@@ -38,19 +39,19 @@ class MangaRenderer:
             except Exception:
                 font = ImageFont.load_default()
 
-            spacing = max(1, int(size * 0.15))
+            spacing = max(1, int(size * 0.12))
 
-            # 1. Pastikan tidak ada kata tunggal yang melebihi lebar target
-            single_word_too_wide = False
+            # Cek apakah ada kata tunggal yang lebih lebar dari target
+            too_wide = False
             for w in words:
                 wb = draw.textbbox((0, 0), w, font=font)
                 if (wb[2] - wb[0]) > target_w:
-                    single_word_too_wide = True
+                    too_wide = True
                     break
-            if single_word_too_wide:
+            if too_wide:
                 continue
 
-            # 2. Bungkus baris teks berdasarkan target_w
+            # Word wrap
             lines = []
             cur_line = []
             for w in words:
@@ -68,15 +69,14 @@ class MangaRenderer:
             if cur_line:
                 lines.append(" ".join(cur_line))
 
-            # 3. Periksa apakah lebar maksimal baris dan tinggi total muat di dalam target
+            # Cek apakah muat secara vertikal
             line_boxes = [draw.textbbox((0, 0), l, font=font) for l in lines]
-            max_lw = max([b[2] - b[0] for b in line_boxes]) if line_boxes else 0
             total_h = sum([b[3] - b[1] for b in line_boxes]) + (len(lines) - 1) * spacing
 
-            if max_lw <= target_w and total_h <= target_h:
+            if total_h <= target_h:
                 return font, lines, spacing
 
-        # Fallback jika teks sangat panjang: gunakan min_font dan wrap per karakter
+        # Fallback: font terkecil, wrap per karakter
         font = ImageFont.truetype(self.font_path, min_font)
         spacing = 1
         lines = []
@@ -101,13 +101,14 @@ class MangaRenderer:
     def render_bubble_text(
         self,
         image: Image.Image,
-        bubble_bbox: Tuple[int, int, int, int],
+        bbox: Tuple[int, int, int, int],
         text: str,
         text_color: Tuple[int, int, int] = (15, 15, 15),
         stroke_color: Tuple[int, int, int] = (255, 255, 255)
     ) -> Image.Image:
         """
-        Merender teks dialog ke dalam balon kata dengan garansi TIDAK KELUAR dari balon.
+        Render teks terjemahan ke dalam balon kata (safe_bbox).
+        Strict fitting menjamin teks muat rapi di dalam rongga balon tanpa meluber keluar.
         """
         if not text or not text.strip():
             return image
@@ -115,15 +116,18 @@ class MangaRenderer:
         clean_text = text.strip()
         img_out = image.copy()
         draw = ImageDraw.Draw(img_out)
-        bx, by, bw, bh = bubble_bbox
+        bx, by, bw, bh = bbox
 
-        # Berikan inner padding 15% dari batas balon
-        target_w = max(8, int(bw * 0.85))
-        target_h = max(8, int(bh * 0.85))
+        # Inner padding 10% agar teks tidak mepet border lengkung balon
+        pad_x = max(2, int(bw * 0.10))
+        pad_y = max(2, int(bh * 0.10))
+        target_w = max(8, bw - 2 * pad_x)
+        target_h = max(8, bh - 2 * pad_y)
 
-        # Batas font proporsional terhadap tinggi balon
-        max_font = max(8, min(42, int(bh * 0.35)))
-        min_font = 4
+        # Font proporsional terhadap ukuran rongga balon:
+        # Dibatasi maksimal 26px agar frasa pendek ("Batang kapal") tidak menjadi raksasa
+        max_font = max(8, min(26, int(bh * 0.22)))
+        min_font = 6
 
         font, lines, spacing = self._fit_text_to_box(
             draw, clean_text, target_w, target_h, max_font=max_font, min_font=min_font
@@ -136,13 +140,13 @@ class MangaRenderer:
         line_heights = [b[3] - b[1] for b in line_boxes]
         total_text_h = sum(line_heights) + (len(lines) - 1) * spacing
 
-        # Posisi vertikal: rata tengah di dalam balon
+        # Posisi vertikal: rata tengah
         cur_y = by + max(0, (bh - total_text_h) // 2)
-        stroke_w = 1 if font.size < 12 else 2
+        stroke_w = 1 if font.size < 14 else 2
 
-        for i, (line, lh, lb) in enumerate(zip(lines, line_heights, line_boxes)):
+        for line, lh, lb in zip(lines, line_heights, line_boxes):
             lw = lb[2] - lb[0]
-            # Posisi horizontal: rata tengah di dalam balon
+            # Posisi horizontal: rata tengah
             cur_x = bx + max(0, (bw - lw) // 2)
 
             draw.text(
@@ -158,4 +162,4 @@ class MangaRenderer:
         return img_out
 
 if __name__ == "__main__":
-    print("MangaRenderer Strict Fitting siap digunakan.")
+    print("MangaRenderer siap digunakan.")
