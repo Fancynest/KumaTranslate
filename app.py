@@ -226,7 +226,21 @@ class TranslationEngine:
             # Lewati teks yang setelah dibuang spasi dan tanda baca kurang dari 2 karakter
             clean_no_punct = PUNCT_REGEX.sub("", t_clean)
             if len(clean_no_punct) < 2:
-                continue
+                # Coba secondary OCR jika teks sebelumnya sangat pendek atau gagal terbaca
+                if effective_lang_hint in ["eng_Latn", "en"] or is_latin:
+                    raw_sec = self.ocr.read_text_secondary(b["crop"], lang="en")
+                    if raw_sec and len(PUNCT_REGEX.sub("", raw_sec)) >= 2:
+                        t_sec, q_sec = post_process_latin_ocr(
+                            raw_sec.strip(),
+                            chapter_counts=all_words_on_page,
+                            glossary_terms=glossary_terms
+                        )
+                        t_clean = t_sec
+                        b["ocr_quality"] = q_sec
+                        b["ocr_low_quality"] = bool(q_sec < 0.6)
+                        clean_no_punct = PUNCT_REGEX.sub("", t_clean)
+                if len(clean_no_punct) < 2:
+                    continue
 
             raw_texts.append(t_clean)
             valid_bubbles.append(b)
@@ -351,9 +365,17 @@ class TranslationEngine:
         for idx, b in enumerate(valid_bubbles):
             t_id = res_id_texts[idx] if idx < len(res_id_texts) else ""
             t_en = res_en_texts[idx] if idx < len(res_en_texts) else ""
+            s_text = raw_texts[idx] if idx < len(raw_texts) else ""
+
+            # Jika OCR berkualitas rendah (tidak ada kata kamus/alfanumerik sah) dan terjemahan kosong, lewati
             if b.get("ocr_low_quality"):
-                print(f"[OCR] Balon #{idx+1} dibiarkan asli karena ocr_low_quality ({b.get('ocr_quality', 0):.2f})")
-                continue
+                meaningful_words = len(re.findall(r'[A-Za-z0-9\u3040-\u30ff\u4e00-\u9fff\uac00-\ud7af]{2,}', s_text))
+                if meaningful_words < 1 or (not t_id.strip() and not t_en.strip()):
+                    print(f"[OCR] Balon #{idx+1} dibiarkan asli karena ocr_low_quality ({b.get('ocr_quality', 0):.2f}) tanpa kata bermakna")
+                    continue
+                else:
+                    b["ocr_low_quality"] = False
+
             if (target_lang in ["ind_Latn", "both"] and t_id.strip()) or (target_lang == "eng_Latn" and t_en.strip()):
                 active_bubbles.append((b, t_id, t_en))
 
@@ -473,6 +495,28 @@ async def serve_index():
     with open(index_path, "r", encoding="utf-8") as f:
         return f.read()
 
+def cleanup_old_temp_tasks(keep_latest: int = 1):
+    """
+    Membersihkan file-file task lama di temp/ agar hard drive tidak bengkak.
+    Menghapus direktori task lama dan menyisakan hanya task terbaru.
+    """
+    try:
+        if not os.path.exists(TEMP_DIR):
+            return
+        subdirs = []
+        for d in os.listdir(TEMP_DIR):
+            dp = os.path.join(TEMP_DIR, d)
+            if os.path.isdir(dp) and re.fullmatch(r'^[0-9a-fA-F]{8}$', d):
+                subdirs.append((os.path.getmtime(dp), dp))
+        subdirs.sort(key=lambda x: x[0], reverse=True)
+        for _, dp in subdirs[keep_latest:]:
+            try:
+                shutil.rmtree(dp, ignore_errors=True)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
 def run_translation_task(
     task_id: str,
     uploaded_path: str,
@@ -482,6 +526,8 @@ def run_translation_task(
     auto_accept_glossary: bool = False,
     translation_backend: str = "auto"
 ):
+    # Bersihkan task lama di background agar disk tidak menumpuk
+    cleanup_old_temp_tasks(keep_latest=2)
     task = TASKS[task_id]
     t0 = time.time()
 
@@ -522,6 +568,39 @@ def run_translation_task(
                 task["detail_message"] = f"Dibatalkan pada halaman {i+1} dari {total_pages}."
                 return
 
+            base = os.path.splitext(os.path.basename(page_path))[0]
+            is_front_cover = (total_pages > 2 and i == 0)
+            is_back_cover = (total_pages > 2 and i == total_pages - 1)
+
+            # Jika halaman merupakan cover paling depan atau cover paling belakang:
+            # Pertahankan 100% gambar artwork aslinya utuh tanpa di-translate!
+            if is_front_cover or is_back_cover:
+                cover_name = "cover depan" if is_front_cover else "cover belakang"
+                print(f"[COVER] Halaman #{i+1} ({cover_name}) dipertahankan 100% asli tanpa terjemahan.")
+                task["status_message"] = f"Menyimpan {cover_name} asli (halaman {i+1} dari {total_pages})..."
+                task["detail_message"] = f"Artwork {cover_name} halaman #{i+1} dilindungi dari modifikasi teks."
+                progress = 10 + int(((i + 1) / total_pages) * 80)
+                task["percent"] = progress
+
+                orig_img = Image.open(page_path).convert("RGB")
+                if target_lang in ["ind_Latn", "both"]:
+                    id_path = os.path.join(task_dir, f"{base}_id.png")
+                    orig_img.save(id_path)
+                    id_pages.append(id_path)
+
+                if target_lang in ["eng_Latn", "both"]:
+                    en_path = os.path.join(task_dir, f"{base}_en.png")
+                    orig_img.save(en_path)
+                    en_pages.append(en_path)
+
+                orig_rel = os.path.relpath(page_path, WORKSPACE_DIR).replace("\\", "/")
+                orig_web_paths.append(f"/static_files/{orig_rel}")
+
+                trans_page = id_pages[-1] if id_pages else en_pages[-1]
+                trans_rel = os.path.relpath(trans_page, WORKSPACE_DIR).replace("\\", "/")
+                trans_web_paths.append(f"/static_files/{trans_rel}")
+                continue
+
             task["status_message"] = f"Menerjemahkan halaman {i+1} dari {total_pages}..."
             task["detail_message"] = f"Memproses paralel batch balon kata halaman #{i+1}"
             progress = 10 + int(((i + 1) / total_pages) * 80)
@@ -554,7 +633,6 @@ def run_translation_task(
                     })
 
             res_images = res["images"]
-            base = os.path.splitext(os.path.basename(page_path))[0]
 
             if "ind_Latn" in res_images:
                 id_path = os.path.join(task_dir, f"{base}_id.png")
@@ -578,7 +656,7 @@ def run_translation_task(
             task["status_message"] = "Proses dibatalkan oleh pengguna."
             return
 
-        # 3. Rakit output akhir
+        # 3. Rakit output akhir di task_dir sementara (bukan di output/ permanen)
         task["status_message"] = "Mengemas file dokumen terjemahan..."
         task["percent"] = 95
 
@@ -587,23 +665,23 @@ def run_translation_task(
         downloads = []
 
         if id_pages:
-            out_id_file = os.path.join(OUTPUT_DIR, f"{base_name}_indonesia{ext}")
+            out_id_filename = f"{base_name}_indonesia{ext}"
+            out_id_file = os.path.join(task_dir, out_id_filename)
             DocumentProcessor.assemble_output(uploaded_path, id_pages, out_id_file)
-            rel_id = os.path.relpath(out_id_file, WORKSPACE_DIR).replace("\\", "/")
             downloads.append({
                 "label": f"Versi Indonesia ({ext.upper()})",
-                "filename": os.path.basename(out_id_file),
-                "url": f"/static_files/{rel_id}"
+                "filename": out_id_filename,
+                "url": f"/api/download/{task_id}/{out_id_filename}"
             })
 
         if en_pages:
-            out_en_file = os.path.join(OUTPUT_DIR, f"{base_name}_english{ext}")
+            out_en_filename = f"{base_name}_english{ext}"
+            out_en_file = os.path.join(task_dir, out_en_filename)
             DocumentProcessor.assemble_output(uploaded_path, en_pages, out_en_file)
-            rel_en = os.path.relpath(out_en_file, WORKSPACE_DIR).replace("\\", "/")
             downloads.append({
                 "label": f"Versi Inggris ({ext.upper()})",
-                "filename": os.path.basename(out_en_file),
-                "url": f"/static_files/{rel_en}"
+                "filename": out_en_filename,
+                "url": f"/api/download/{task_id}/{out_en_filename}"
             })
 
         # Ekstraksi kandidat nama tokoh/istilah untuk konfirmasi pengguna di UI
@@ -756,6 +834,23 @@ async def discover_candidates_from_task(series_id: str, task_id: str):
         "candidates": candidates
     }
 
+@app.get("/api/download/{task_id}/{filename}")
+async def download_result_file(task_id: str, filename: str):
+    """
+    Mengunduh file dokumen hasil terjemahan langsung ke folder Downloads pengguna.
+    File hanya ada sementara di sesi task dan tidak menumpuk permanen di workspace.
+    """
+    valid_task_id = _validate_uuid_task_id(task_id)
+    safe_filename = os.path.basename(filename)
+    file_path = os.path.join(TEMP_DIR, valid_task_id, safe_filename)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File terjemahan tidak ditemukan atau sesi telah dibersihkan.")
+    return FileResponse(
+        path=file_path,
+        filename=safe_filename,
+        media_type="application/octet-stream"
+    )
+
 @app.post("/api/cancel/{task_id}")
 async def cancel_task(task_id: str):
     valid_task_id = _validate_uuid_task_id(task_id)
@@ -786,6 +881,7 @@ async def shutdown_server(request: Request):
 
     def delayed_exit():
         time.sleep(0.6)
+        cleanup_old_temp_tasks(keep_latest=0)
         import torch
         if torch.cuda.is_available():
             torch.cuda.empty_cache()

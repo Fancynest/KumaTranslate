@@ -266,9 +266,20 @@ class MangaRenderer:
             if dyn_all_fit:
                 return dyn_font, dyn_lines, dyn_line_positions, dyn_spacing
 
-        # Fallback terakhir jika balon sangat sempit: pecah token dengan hyphen (-),
-        # dan JANGAN PERNAH menyisakan potongan yatim 1-2 huruf (seperti 'menyelesaika\\nn' atau 'mengantu\\nk')
-        font = ImageFont.truetype(self.font_path, max(7, min_font - 4))
+        # Fallback terakhir jika balon sangat sempit: perkecil font hingga seluruh token muat utuh,
+        # dan JANGAN PERNAH menyisakan potongan yatim 1-2 huruf (seperti 'menyelesaika\nn')
+        font = None
+        for last_size in range(max(6, min_font - 4), 4, -1):
+            try:
+                cand_font = ImageFont.truetype(self.font_path, last_size)
+            except Exception:
+                cand_font = ImageFont.load_default()
+            if all((draw.textbbox((0, 0), w, font=cand_font)[2] - draw.textbbox((0, 0), w, font=cand_font)[0]) <= rect_w for w in words):
+                font = cand_font
+                break
+        if font is None:
+            font = ImageFont.truetype(self.font_path, 6)
+
         spacing = 1
         sample_bbox = draw.textbbox((0, 0), "Ag", font=font)
         line_h = sample_bbox[3] - sample_bbox[1]
@@ -276,45 +287,34 @@ class MangaRenderer:
         broken_words = []
         for w in words:
             w_bb = draw.textbbox((0, 0), w, font=font)
-            if (w_bb[2] - w_bb[0]) > rect_w:
+            if (w_bb[2] - w_bb[0]) > rect_w and len(w) >= 6:
                 # Potong di suku kata yang rapi dengan minimal 3 karakter per potongan
-                cur_chunk = ""
-                for idx_ch, ch in enumerate(w):
-                    cand_chunk = cur_chunk + ch
-                    c_bb = draw.textbbox((0, 0), cand_chunk + "-", font=font)
-                    if (c_bb[2] - c_bb[0]) <= rect_w:
-                        cur_chunk = cand_chunk
-                    else:
-                        remaining = len(w) - idx_ch
-                        if len(cur_chunk) >= 3 and remaining >= 3:
-                            broken_words.append(cur_chunk + "-")
-                            cur_chunk = ch
-                        elif cur_chunk:
-                            cur_chunk += ch
-                        else:
-                            broken_words.append(ch)
-                            cur_chunk = ""
-                if cur_chunk:
-                    broken_words.append(cur_chunk)
+                mid = len(w) // 2
+                p1, p2 = w[:mid], w[mid:]
+                if len(p1) >= 3 and len(p2) >= 3:
+                    broken_words.append(p1 + "-")
+                    broken_words.append(p2)
+                else:
+                    broken_words.append(w)
             else:
                 broken_words.append(w)
 
         lines = []
         cur_line = []
         for w in broken_words:
-            cand = " ".join(cur_line + [w])
+            cand = join_tokens(cur_line + [w])
             w_bb = draw.textbbox((0, 0), cand, font=font)
             if (w_bb[2] - w_bb[0]) <= rect_w:
                 cur_line.append(w)
             else:
                 if cur_line:
-                    lines.append(" ".join(cur_line))
+                    lines.append(join_tokens(cur_line))
                     cur_line = [w]
                 else:
                     lines.append(w)
                     cur_line = []
         if cur_line:
-            lines.append(" ".join(cur_line))
+            lines.append(join_tokens(cur_line))
 
         total_h = len(lines) * line_h + (len(lines) - 1) * spacing
         start_y = by + max(0, (bh - total_h) // 2)
@@ -372,14 +372,25 @@ class MangaRenderer:
 
         stroke_w = 1 if font.size < 14 else 2
 
+        # Deteksi apakah latar balon berwarna gelap
+        crop_sample = np.array(image)[max(0, by):min(image.height, by + bh), max(0, bx):min(image.width, bx + bw)]
+        if crop_sample.size > 0:
+            gray_sample = cv2.cvtColor(crop_sample, cv2.COLOR_RGB2GRAY) if len(crop_sample.shape) == 3 else crop_sample
+            is_dark_bg = (float(np.median(gray_sample)) < 110 or float(np.mean(gray_sample)) < 110)
+        else:
+            is_dark_bg = False
+
+        cur_text_color = (255, 255, 255) if is_dark_bg else text_color
+        cur_stroke_color = (0, 0, 0) if is_dark_bg else stroke_color
+
         for line, (lx, ly) in zip(lines, line_positions):
             draw.text(
                 (lx, ly),
                 line,
-                fill=text_color,
+                fill=cur_text_color,
                 font=font,
                 stroke_width=stroke_w,
-                stroke_fill=stroke_color
+                stroke_fill=cur_stroke_color
             )
 
         return img_out
@@ -474,14 +485,27 @@ class MangaRenderer:
                 continue
 
             stroke_w = 1 if font.size < 14 else 2
+
+            # Deteksi apakah latar balon berwarna gelap
+            rx, ry, rw, rh = r_box
+            crop_sample = np.array(image)[max(0, ry):min(image.height, ry + rh), max(0, rx):min(image.width, rx + rw)]
+            if crop_sample.size > 0:
+                gray_sample = cv2.cvtColor(crop_sample, cv2.COLOR_RGB2GRAY) if len(crop_sample.shape) == 3 else crop_sample
+                is_dark_bg = (float(np.median(gray_sample)) < 110 or float(np.mean(gray_sample)) < 110)
+            else:
+                is_dark_bg = False
+
+            cur_text_color = (255, 255, 255) if is_dark_bg else text_color
+            cur_stroke_color = (0, 0, 0) if is_dark_bg else stroke_color
+
             for line, (lx, ly) in zip(lines, line_positions):
                 draw.text(
                     (lx, ly),
                     line,
-                    fill=text_color,
+                    fill=cur_text_color,
                     font=font,
                     stroke_width=stroke_w,
-                    stroke_fill=stroke_color
+                    stroke_fill=cur_stroke_color
                 )
 
         return img_out

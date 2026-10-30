@@ -338,19 +338,27 @@ class BubbleDetector:
             rel_tw = min(rw - rel_tx, tw)
             rel_th = min(rh - rel_ty, th)
 
-            # Ukur kecerahan interior di dalam text_bbox
+            # Ukur kecerahan interior di dalam text_bbox untuk deteksi balon terang vs gelap
             text_roi = roi_gray[rel_ty:rel_ty+rel_th, rel_tx:rel_tx+rel_tw]
-            if text_roi.size > 0:
-                bg_bright = float(np.percentile(text_roi, 85))
-            else:
-                bg_bright = float(np.percentile(roi_gray, 85))
+            sample_roi = text_roi if text_roi.size > 0 else roi_gray
+            roi_median = float(np.median(sample_roi))
+            roi_mean = float(np.mean(sample_roi))
 
-            thresh = max(130, int(bg_bright - 35))
-            bright_mask = (roi_gray >= thresh).astype(np.uint8) * 255
+            is_dark_bubble = (roi_median < 110 or roi_mean < 110)
+            if is_dark_bubble:
+                # Balon gelap / hitam: latar belakang gelap dan teks terang/putih
+                bg_dark = float(np.percentile(sample_roi, 15))
+                thresh = min(125, int(bg_dark + 45))
+                comp_mask = (roi_gray <= thresh).astype(np.uint8) * 255
+            else:
+                # Balon terang / putih / abu-abu standar
+                bg_bright = float(np.percentile(sample_roi, 85))
+                thresh = max(130, int(bg_bright - 35))
+                comp_mask = (roi_gray >= thresh).astype(np.uint8) * 255
 
             # Kernel minimal 3x3 agar memutus ekor tipis tanpa merusak sudut kotak narasi atau balon runcing/screaming
             kernel_open = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-            bright_opened = cv2.morphologyEx(bright_mask, cv2.MORPH_OPEN, kernel_open)
+            bright_opened = cv2.morphologyEx(comp_mask, cv2.MORPH_OPEN, kernel_open)
 
             num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(bright_opened)
 
@@ -376,7 +384,7 @@ class BubbleDetector:
             if best_label > 0:
                 bubble_comp = (labels == best_label).astype(np.uint8) * 255
                 bubble_comp = cv2.morphologyEx(bubble_comp, cv2.MORPH_DILATE, kernel_open)
-                bubble_comp = cv2.bitwise_and(bubble_comp, bright_mask)
+                bubble_comp = cv2.bitwise_and(bubble_comp, comp_mask)
                 kernel_close = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
                 bubble_comp = cv2.morphologyEx(bubble_comp, cv2.MORPH_CLOSE, kernel_close)
                 # Isi lubang interior (goresan teks gelap) di dalam balon
@@ -579,20 +587,25 @@ class BubbleDetector:
 
         crop = img_rgb[py:py+ph, px:px+pw].copy()
 
-        # 1. Bersihkan piksel di luar balon kata menjadi putih murni
+        # Deteksi apakah crop merupakan balon gelap (teks terang di atas latar gelap)
+        crop_gray = cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY) if len(crop.shape) == 3 else crop
+        is_dark_crop = (float(np.median(crop_gray)) < 110 or float(np.mean(crop_gray)) < 110)
+        bg_fill = [0, 0, 0] if is_dark_crop else [255, 255, 255]
+
+        # 1. Bersihkan piksel di luar balon kata sesuai latar balon
         if bubble_mask is not None and bubble_mask.shape[:2] == (h_orig, w_orig):
             mask_slice = bubble_mask[py:py+ph, px:px+pw]
             kernel_size = max(3, int(font_size * 0.15)) | 1
             kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_size, kernel_size))
             eroded_mask = cv2.erode(mask_slice, kernel, iterations=1)
-            crop[eroded_mask == 0] = [255, 255, 255]
+            crop[eroded_mask == 0] = bg_fill
 
-        # 2. Tambahkan padding putih 8-12 px di sekeliling crop
+        # 2. Tambahkan padding sekeliling crop dengan warna latar balon
         crop = cv2.copyMakeBorder(
             crop,
             padding, padding, padding, padding,
             borderType=cv2.BORDER_CONSTANT,
-            value=[255, 255, 255]
+            value=bg_fill
         )
 
         # 3. Skalakan agar tinggi huruf sekitar 24-32 px (bukan upscale mentah ke 736 px)
@@ -814,6 +827,10 @@ class BubbleDetector:
             # Mask teks milik balon tetangga/asing pada gambar crop OCR agar tidak terbaca campur aduk
             cleaned_rgb = img_rgb.copy()
             sx, sy, sw, sh = safe_bbox
+            cur_gray = gray[sy:sy+sh, sx:sx+sw]
+            is_dark_b = (float(np.median(cur_gray)) < 110 or float(np.mean(cur_gray)) < 110) if cur_gray.size > 0 else False
+            fill_foreign = [0, 0, 0] if is_dark_b else [255, 255, 255]
+
             for other_idx, other_boxes in enumerate(bubble_texts):
                 if other_idx == b_idx:
                     continue
@@ -824,7 +841,7 @@ class BubbleDetector:
                         py1 = max(0, oy - 4)
                         px2 = min(w_orig, ox + ow + 4)
                         py2 = min(h_orig, oy + oh + 4)
-                        cleaned_rgb[py1:py2, px1:px2] = 255
+                        cleaned_rgb[py1:py2, px1:px2] = fill_foreign
 
             # Crop seluruh isi rongga balon kata (safe_bbox) untuk OCR dengan pra-proses
             crop_img = self._prepare_ocr_crop(
@@ -871,6 +888,21 @@ class BubbleDetector:
                     b for b in unassigned_text_boxes
                     if b[0] >= fx - 12 and b[1] >= fy - 12 and (b[0] + b[2]) <= (fx + fw + 12) and (b[1] + b[3]) <= (fy + fh + 12)
                 ]
+
+                # Deteksi Tipografi Judul / Huruf Seni Raksasa (Manga Title / Cover Lettering)
+                # Judul biasanya berukuran jauh lebih besar daripada font dialog normal (tinggi kotak >= 42px),
+                # atau berukuran raksasa di bagian atas halaman tanpa outline balon YOLO.
+                avg_box_h = float(np.mean([b[3] for b in boxes_in_cluster])) if boxes_in_cluster else float(fh)
+                is_giant_title = (
+                    avg_box_h >= 42.0 or
+                    (fw >= w_orig * 0.25 and fh >= h_orig * 0.08 and fy < h_orig * 0.55) or
+                    (fw * fh >= w_orig * h_orig * 0.04 and fy < h_orig * 0.50)
+                )
+
+                if is_giant_title:
+                    # Sesuai requirement #6: Jangan pernah menimpa / menerjemahkan judul manga dekoratif atau huruf sampul!
+                    print(f"[DETECTOR] Tipografi judul / huruf sampul artistik dilewati dan dilindungi: bbox={fc}")
+                    continue
 
                 # Jika cluster memiliki >= 2 baris teks bertumpuk atau cukup lebar untuk sebuah kalimat,
                 # ini adalah balon kata dialog / kotak narasi (cth: balon berbayang screentone abu-abu)

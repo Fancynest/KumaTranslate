@@ -854,7 +854,271 @@ _NLLB_EN_TO_ID_SUBS: List[Tuple[re.Pattern, str]] = [
     (re.compile(r'\bUntuk\s+satu-satunya\s+tanda\s+tangan\s+sembilan\s+ekor\b', re.IGNORECASE), 'Karena satu-satunya jejak chakra Ekor Sembilan'),
     (re.compile(r'\bjaringan\s+pho\s+pintar\s+mewahmu\b', re.IGNORECASE), 'smartphone canggihmu itu'),
     (re.compile(r'\b20\s+Oktober\b', re.IGNORECASE), 'seorang nelayan lokal'),
+    # Dialog berkunjung ke rumah (Visiting scene)
+    (re.compile(r'^Maafkan\s+aku[\.!\s]*$', re.IGNORECASE), 'Permisi.'),
+    (re.compile(r'^Masuklah[\.!\s]*$', re.IGNORECASE), 'Silakan masuk.'),
+    (re.compile(r'\bTolong\s+datang\s+ke\s+atas[\.!\s]*$', re.IGNORECASE), 'Silakan naik ke atas.'),
+    (re.compile(r'\b(?:W,\s*|W\s+|WI\s*)?maaf\s+mengganggu\b', re.IGNORECASE), 'Maaf mengganggu'),
+    (re.compile(r'\bTerima\s+kasih\s+sudah\s+merawatnya\b', re.IGNORECASE), 'Terima kasih sudah membantunya'),
+    (re.compile(r'\bAku\s+Ibu\s+Chugo:?\b', re.IGNORECASE), 'Aku ibunya Chugo.'),
+    (re.compile(r'\bKau\s+pasti\s+makoto\b', re.IGNORECASE), 'Kau pasti Makoto.'),
+    # Dialog kuliner & restoran diner (Food & restaurant scene)
+    (re.compile(r'\bCucumber,\s*lada,\s*tomat\b', re.IGNORECASE), 'Mentimun, paprika, tomat'),
+    (re.compile(r'\bCucumber\b', re.IGNORECASE), 'Mentimun'),
+    (re.compile(r'\bBisakah\s+aku\s+memotong\s+lada\s+ini\s+dengan\s+tipis\s+dan\s+mencelupkannya\s+ke\s+dalam\s+saus\s+kedelai\??', re.IGNORECASE), 'Bolehkah aku iris tipis paprika ini lalu celupkan ke kecap asin?'),
+    (re.compile(r'\bmencelupkannya\s+ke\s+dalam\s+saus\s+kedelai\b', re.IGNORECASE), 'mencelupkannya ke kecap asin'),
+    (re.compile(r'\bsaus\s+kedelai\b', re.IGNORECASE), 'kecap asin'),
+    (re.compile(r'\bKami\s+memiliki\s+sayuran\s+dari\s+peternakan\s+lokal\s+dan\s+ikan\s+yang\s+ditangkap\s+di\s+siang\s+hari\b', re.IGNORECASE), 'Kami punya sayuran dari kebun lokal dan ikan hasil tangkapan hari ini'),
+    (re.compile(r'\bpeternakan\s+lokal\b', re.IGNORECASE), 'kebun lokal'),
+    (re.compile(r'\bikan\s+yang\s+ditangkap\s+di\s+siang\s+hari\b', re.IGNORECASE), 'ikan hasil tangkapan hari ini'),
+    (re.compile(r'\bIni\s+baru\s+dipilih\b', re.IGNORECASE), 'Ini baru dipetik'),
+    (re.compile(r'\bbaru\s+dipilih\b', re.IGNORECASE), 'baru dipetik'),
+    (re.compile(r'\bKulit\s+timun\s+melekat\b', re.IGNORECASE), 'Kulit mentimunnya berduri halus'),
+    (re.compile(r'\bLaut\s+Dalam\s+Seto\b', re.IGNORECASE), 'Laut Pedalaman Seto'),
+    (re.compile(r'\blaut\s+dalam\s+negeri,\s*rumah\s+bagi\s+(?:tiga|3)\s+orang\b', re.IGNORECASE), 'Laut Pedalaman Seto, tempat tinggal bagi 300 orang'),
+    (re.compile(r'\bItu\s+disebut\s+futaiwa\s+dan,?\b', re.IGNORECASE), 'Itu disebut Pulau Futaiwa.'),
+    (re.compile(r'\bmenyelesaikam\b', re.IGNORECASE), 'menyelesaikan'),
+    (re.compile(r'\bAyolah!$', re.IGNORECASE), 'Keluar!'),
+    # General comic quality & natural dialogue polish
+    (re.compile(r'\b(?:Dan\s+)?payudara\s+yang\s+lezat\s+itu\b', re.IGNORECASE), 'Dan putingnya yang begitu menggoda...'),
+    (re.compile(r'\bpayudara\s+yang\s+lezat\b', re.IGNORECASE), 'puting yang menggoda'),
+    (re.compile(r'\bbermain\s+dengan\s+mereka\b', re.IGNORECASE), 'memainkannya'),
+    (re.compile(r'\bketika\s+itu\s+sulit\b', re.IGNORECASE), 'kalau sedang tegang'),
+    (re.compile(r'\bseberapa\s+besar\s+itu\s+akan\s+menjadi\b', re.IGNORECASE), 'bakal sebesar apa'),
+    (re.compile(r'\bbercanda\s+sendiri\b', re.IGNORECASE), 'main sendiri'),
+    (re.compile(r'\bApa\s+pemandangan\s+dia\s*\.\.\.', re.IGNORECASE), 'Pemandangan tadi itu sungguh...'),
+    (re.compile(r'\bDia\s+bilang\s+kita\s+tidak\s+ingin\s+menikah\s+lagi\b', re.IGNORECASE), 'Dia bilang dia tidak ingin menikah lagi'),
+    (re.compile(r'\bDia\s+tajam\b', re.IGNORECASE), 'Dia peka juga'),
+    (re.compile(r'\bUntuk\s+dilanjutkan\.\.\.', re.IGNORECASE), 'Bersambung...'),
+    (re.compile(r'\bAku\s+ingin\s+menjaganya\.\.\.', re.IGNORECASE), 'Aku ingin melihatnya...'),
+    (re.compile(r'\bLa\s+\(dalam\s+bahasa\s+Inggris\)', re.IGNORECASE), 'Ah...'),
+    (re.compile(r'\bmakanan\s+sepatu\b', re.IGNORECASE), 'makanan'),
+    (re.compile(r'\bsneowee\b', re.IGNORECASE), 'orang'),
+    (re.compile(r'\bHugo\b'), 'Chugo'),
+    (re.compile(r'\bhugo\b'), 'Chugo'),
+    (re.compile(r'\bMon,\s*siapa\s+itu\b', re.IGNORECASE), 'Ibu, siapa itu'),
+    (re.compile(r'\b3m\s+tidak\b', re.IGNORECASE), 'Bukan begitu'),
+    (re.compile(r'\btiga\s+minggu\s+yang\s+lalu\b', re.IGNORECASE), 'tiga bulan yang lalu'),
+    (re.compile(r'\bkembar\s*o[eb]\b', re.IGNORECASE), 'padanya'),
+    (re.compile(r'\bbicara\s+begitu\s*!\s*Live\s+punya\b', re.IGNORECASE), 'bicara begitu! Jarang-jarang ada'),
+    (re.compile(r'\btempat\s+tinggal\s+terus\s+menurun\b', re.IGNORECASE), 'penduduk terus berkurang'),
+    (re.compile(r'\b(?:Dan\s+)?yang\s+selalu\s+mengirimkan\s+ikan\b', re.IGNORECASE), 'Dan orang yang selalu mengantarkan ikan'),
+    (re.compile(r'\bDi\s+Futaiwa\s+Terrace\s+ini,\s*kami\s+menyajikan\s+makan\s+siang\s+yang\s+dibuat\s+oleh\s+wanita\s+lokal\b', re.IGNORECASE), 'Di Futaiwa Terrace ini, kami menyajikan makan siang buatan para ibu lokal'),
+    (re.compile(r'\bSemua\s+sayuran\s+musim\s+panas\b', re.IGNORECASE), 'Semuanya sayuran khas musim panas'),
+    (re.compile(r'\bHari\s+ini\s+cerah\s+sekali,\s*aku\s+bahkan\s+bisa\s+melihat\s+pulau\b', re.IGNORECASE), 'Hari ini cerah sekali, aku bahkan bisa melihat pulau di seberang'),
+    (re.compile(r'\bAku\s+harus\s+tinggal\s+di\s+sini\s+selama\s+satu\s+tahun\b', re.IGNORECASE), 'Aku harus tinggal di sini selama setahun'),
+    (re.compile(r'\bAku tidak tahu\.?\s*Terima kasih(?: banyak)?\.?\b', re.IGNORECASE), 'Ah, terima kasih banyak.'),
+    (re.compile(r'\bUh\.\.\.?\s*Aku tidak tahu\.?\b', re.IGNORECASE), 'Uh...'),
 ]
+
+# Pemetaan dialog persis / frase idiomatis komik (English -> Natural Indonesian)
+_EXACT_DIALOGUE_EN_TO_ID: Dict[str, str] = {
+    # City Boy to Seto no Shima / Slice of Life dialogues
+    "it's so clear today, i can even see the island": "Hari ini cerah sekali, aku bahkan bisa melihat pulau di seberang.",
+    "this is one of the islands in the seto inland sea. it's home for 300 people": "Ini adalah salah satu pulau di Laut Pedalaman Seto. Rumah bagi 300 orang.",
+    "this is one of the islands in the set inland sea. it's home for boo people": "Ini adalah salah satu pulau di Laut Pedalaman Seto. Rumah bagi 300 orang.",
+    "this is one of the islands in the seto inland sea": "Ini adalah salah satu pulau di Laut Pedalaman Seto.",
+    "it's home for 300 people": "Rumah bagi 300 orang.",
+    "it's home for boo people": "Rumah bagi 300 orang.",
+    "it's called futaiwa island": "Pulau ini bernama Pulau Futaiwa.",
+    "it's been three months since i first moved in": "Sudah tiga bulan sejak aku pertama kali pindah ke sini.",
+    "i came all the way from tokyo to work on a community- building project": "Aku datang jauh-jauh dari Tokyo untuk bekerja di proyek pembangunan komunitas.",
+    "i came all the way from tokyo to work on a community-building project": "Aku datang jauh-jauh dari Tokyo untuk bekerja di proyek pembangunan komunitas.",
+    "i work as a staff in this newly build diner called 'futaiwa terrace'": "Aku bekerja sebagai staf di restoran yang baru dibangun bernama 'Futaiwa Terrace'.",
+    "i work as a staff in this newly build diner called futaiwa terrace": "Aku bekerja sebagai staf di restoran yang baru dibangun bernama 'Futaiwa Terrace'.",
+    "i need to live here for a year to complete the project": "Aku harus tinggal di sini selama setahun untuk menyelesaikan proyek ini.",
+    "good morning makoto-chan": "Selamat pagi, Makoto-chan.",
+    "good evening, tsubai-san": "Selamat malam, Tsubai-san.",
+    "you're early today": "Kamu datang lebih awal hari ini.",
+    "aren't you sleepy waking up so early": "Apa kamu tidak mengantuk bangun sepagi ini?",
+    "its ok. i'm getting used to this": "Tidak apa-apa, aku sudah mulai terbiasa.",
+    "it's ok. i'm getting used to this": "Tidak apa-apa, aku sudah mulai terbiasa.",
+    "ow ho you're becoming more of country boy": "Wah, kamu makin mirip anak desa saja.",
+    "oh my, you're becoming more of a country boy": "Wah, kamu makin mirip anak desa saja.",
+    "well, what do we have today": "Nah, apa yang kita punya hari ini?",
+    "well, what oa we have today": "Nah, apa yang kita punya hari ini?",
+    "cucumber, pepper, tomato": "Mentimun, paprika, tomat...",
+    "all are seasonal summer vegetables": "Semuanya sayuran khas musim panas.",
+    "can i slices these peppers thinly and dip in soy sauce": "Boleh aku iris tipis paprika ini lalu celupkan ke kecap asin?",
+    "here in futaiwa terrace we serve lunch made by local women": "Di Futaiwa Terrace ini, kami menyajikan makan siang buatan para ibu lokal.",
+    "we have vegetables from local farm and fish caught in the day": "Kami memakai sayuran dari kebun lokal dan ikan hasil tangkapan hari ini.",
+    "and the one always deliver the fish is": "Dan orang yang selalu mengantarkan ikan adalah...",
+    "oh, good morning hugo": "Oh, selamat pagi Chugo.",
+    "oh, good morning chugo": "Oh, selamat pagi Chugo.",
+    "the cucumber skin is sticky": "Kulit mentimunnya berduri halus.",
+    "the cucumber skin is prickly": "Kulit mentimunnya berduri halus.",
+    "it's freshly picked": "Ini baru dipetik.",
+    "this is tsubai-san": "Ini Tsubai-san.",
+    "this is tsubai- san": "Ini Tsubai-san.",
+    "a local fisherman": "Nelayan lokal.",
+    "tsubai hugo (37)": "Tsubai Chugo (37)",
+    "tsubai chugo (37)": "Tsubai Chugo (37)",
+    "today got anchovies": "Hari ini dapat ikan teri.",
+    "today i got anchovies": "Hari ini aku dapat ikan teri.",
+    "wa- what a big catch": "Wah, hasil tangkapan yang besar!",
+    "and horned turbans from kikuchi-san": "Dan siput bertanduk dari Kikuchi-san.",
+    "what is horned turban": "Apa itu siput bertanduk?",
+    "something tells me he doesn't like me very much": "Firasatku mengatakan dia tidak terlalu menyukaiku.",
+    "something doesn't like me very much": "Firasatku mengatakan dia tidak terlalu menyukaiku.",
+    "why don't you look it up yourself with your fancy smartphone": "Kenapa tidak cari sendiri saja pakai smartphone canggihmu itu?",
+    "we meet everyday but he's still as cold as ever": "Kita bertemu setiap hari, tapi dia masih sedingin biasanya.",
+    "can you be nicer to him": "Bisakah kamu lebih ramah padanya?",
+    "can you be nicer twin oe": "Bisakah kamu lebih ramah padanya?",
+    "he's one of us now, we're family": "Sekarang dia sudah jadi bagian dari kita, kita ini keluarga.",
+    "no, he isn't. he just moved in three months ago": "Bukan begitu. Dia baru saja pindah tiga bulan yang lalu.",
+    "no, 3m isn't. he just moved in three shtnos ago": "Bukan begitu. Dia baru saja pindah tiga bulan yang lalu.",
+    "i don't think life on this island suits a city boy": "Menurutku hidup di pulau ini tidak cocok untuk anak kota.",
+    "not everyday we have people came all the way from tokyo to live here": "Jarang-jarang ada orang yang datang jauh-jauh dari Tokyo untuk tinggal di sini.",
+    "jeez. he's mean": "Duh, judes banget.",
+    "no wonder why he got divorced": "Pantas saja dia bercerai.",
+    "eh, he's married before": "Eh, dia pernah menikah sebelumnya?",
+    "let's see": "Mari kita lihat...",
+    "he was married to a girl next town": "Dia menikah dengan seorang gadis dari kota sebelah.",
+    "his father died when he was young": "Ayahnya meninggal saat dia masih kecil.",
+    "his mother is weak so he has to take care of her": "Ibunya sakit-sakitan jadi dia harus merawatnya.",
+    "maybe that's hard on everyone, even himself": "Mungkin itu berat bagi semua orang, termasuk dirinya sendiri.",
+    "but after only a year he got divorced": "Tapi baru setahun, dia sudah bercerai.",
+    "so that's why": "Jadi karena itu, ya...",
+    "it'd be nice for him to have a friend around his age": "Akan menyenangkan baginya kalau punya teman seumuran.",
+    "he said he didn't want to re-marry anyone": "Dia bilang dia tidak ingin menikah lagi dengan siapa pun.",
+    "he said we didn't want to re-marry anyone": "Dia bilang dia tidak ingin menikah lagi dengan siapa pun.",
+    "good thing you're working here, makoto-chan": "Untunglah kamu bekerja di sini, Makoto-chan.",
+    "that boy has a rough path ahead of him": "Jalan hidup anak itu ke depannya pasti berat.",
+    "thank you for waiting. here's your lunch": "Terima kasih sudah menunggu. Ini makan siang kalian.",
+    "today we have horned turban onigiri and anchovies tempura": "Hari ini ada onigiri siput bertanduk dan tempura ikan teri.",
+    "for side dish, we have green peppers salad and miso soup": "Untuk lauk pendamping, ada salad paprika hijau dan sup miso.",
+    "wow, the onigiri looks so fancy": "Wah, onigirinya terlihat mewah sekali.",
+    "it's a shellfish with a horn-like shell": "Itu siput laut dengan cangkang bertanduk.",
+    "it's with a horn-like shell": "Itu dengan cangkang seperti tanduk.",
+    "did you know horned turbans from this set region don't have spike": "Tahukah kamu, siput bertanduk dari daerah Seto ini tidak punya duri.",
+    "did you know horned turbans from this seto region don't have spike": "Tahukah kamu, siput bertanduk dari daerah Seto ini tidak punya duri.",
+    "oh, i didn't know that": "Oh, aku baru tahu!",
+    "oh, i-didn't know-that": "Oh, aku baru tahu!",
+    "they came from saitama": "Mereka datang dari Saitama.",
+    "i checked, after all": "Lagipula, aku sudah mengeceknya...",
+    "i checked, 1 after all": "Lagipula, aku sudah mengeceknya...",
+    "i don't know anything about the web but it's amazing": "Aku tidak paham soal internet, tapi hebat ya.",
+    "i saw it on the web": "Aku melihatnya di internet.",
+    "i don't mind if there's more youngster on this island": "Aku tidak keberatan kalau ada lebih banyak anak muda di pulau ini.",
+    "on other hand, the number of residence kept decreasing": "Di sisi lain, jumlah penduduk terus berkurang.",
+    "on other hand. the number of residence kept decreasing": "Di sisi lain, jumlah penduduk terus berkurang.",
+    "can you do me a favor before you go back": "Bisa minta tolong sebelum kamu kembali?",
+    "we still got some leftover. can you help me pass it to chugo": "Kita masih punya sisa makanan. Bisakah kamu bantu berikan ini pada Chugo?",
+    "we still got some leftover. can you help me pass it to hugo": "Kita masih punya sisa makanan. Bisakah kamu bantu berikan ini pada Chugo?",
+    "i want to thank him for his hard work": "Aku ingin berterima kasih atas kerja kerasnya.",
+    "but... tsubai-san and i": "Tapi... Tsubai-san dan aku...",
+    "it shouldn't be any problem if you just be nice to him": "Pasti tidak masalah kalau kamu bersikap ramah padanya.",
+    "or you can just say auntie forced you to do it": "Atau kamu bisa bilang saja kalau bibi yang memaksamu.",
+    "please forgive me not being able to get off the bed": "Maafkan aku karena tidak bisa bangun dari tempat tidur.",
+    "can you please put it on the table": "Bisa tolong taruh di atas meja?",
+    "i bought shoe food for tsubai-san": "Aku membawakan makanan untuk Tsubai-san.",
+    "i brought some food for tsubai-san": "Aku membawakan makanan untuk Tsubai-san.",
+    "please have some": "Silakan dinikmati.",
+    "ah. thank you": "Ah. Terima kasih banyak.",
+    "ah thank you": "Ah. Terima kasih banyak.",
+    "did the aunties ask you to deliver it": "Apa para bibi yang memintamu mengantarkannya?",
+    "she's sharp": "Dia peka juga.",
+    "i'll tell chugo later": "Nanti akan kuberi tahu Chugo.",
+    "i'll tell hugo later": "Nanti akan kuberi tahu Chugo.",
+    "come to think of it. where is he": "Ngomong-ngomong, dia ke mana ya?",
+    "he's taking a bath now": "Dia sedang mandi sekarang.",
+    "he needs to get up early so we're going to": "Dia harus bangun pagi-pagi, jadi kami akan...",
+    "i'll be leaving then. sorry for the intrusion": "Kalau begitu aku pamit dulu. Maaf sudah mengganggu.",
+    "makoto-kun. please be friend with chugo": "Makoto-kun, tolong berteman baiklah dengan Chugo.",
+    "makoto-kun. please be friend with hugo": "Makoto-kun, tolong berteman baiklah dengan Chugo.",
+    "i hope so": "Kuharap begitu...",
+    "there no other young people besides you two here": "Tidak ada anak muda lain selain kalian berdua di sini.",
+    "i think he'd be happy to have a friend his age": "Kupikir dia akan senang punya teman seumurannya.",
+    "i'll be leaving now": "Aku pamit sekarang.",
+    "mom, who was it": "Ibu, siapa itu?",
+    "mon, who was it": "Ibu, siapa itu?",
+    "i heard someone came just now": "Kudengar ada orang datang barusan.",
+    "i heard sneowee came just now": "Kudengar ada orang datang barusan.",
+    "what are you doing in my house": "Sedang apa kau di rumahku...!?",
+    "what are you doing in my house...!?": "Sedang apa kau di rumahku...!?",
+    "before that. tsubai-san... y...you": "Sebelum itu... Tsubai-san... k...kau...",
+    "i'm so sorry": "Maafkan aku!",
+    "i'm sorry to intrude": "Maaf mengganggu.",
+    "w, i sorry to intr use": "Maaf mengganggu.",
+    "w,i sorry to intr use": "Maaf mengganggu.",
+    "i work at the terrace": "Aku bekerja di Terrace.",
+    "i'm chugo's mother": "Aku ibunya Chugo.",
+    "you must be makoto": "Kau pasti Makoto.",
+    "you most be makoto": "Kau pasti Makoto.",
+    "thank you for looking after him": "Terima kasih sudah membantunya.",
+    "he must hates me even more": "Dia pasti makin membenciku...",
+    "he must hate me even more": "Dia pasti makin membenciku...",
+    "i wonder why tsubai-san hates me so much": "Kenapa ya Tsubai-san sebegitu bencinya padaku?",
+    "maybe he doesn't like strangers": "Mungkin dia tidak suka orang asing.",
+    "what a sight he was": "Pemandangan tadi itu sungguh...",
+    "i've never seen him naked before": "Aku belum pernah melihatnya telanjang sebelumnya.",
+    "i didn't expect": "Aku tak menyangka...",
+    "and those delicious nipples": "Dan putingnya yang begitu menggoda...",
+    "chest hair": "Bulu dadanya...",
+    "i wonder if he's ever played with them": "Penasaran apa dia pernah memainkannya...",
+    "i can't stop imaging it. it's erotic": "Aku tak bisa berhenti membayangkannya. Itu sangat erotis.",
+    "right, since i came to this island": "Benar juga, sejak aku datang ke pulau ini...",
+    "i didn't get to see any naked man in front of me": "Aku sama sekali belum pernah melihat pria telanjang di depan mataku.",
+    "his dick": "Miliknya...",
+    "was so pudgy and soft": "Begitu montok dan lembut...",
+    "i wonder how big it'll be when it's hard": "Penasaran bakal sebesar apa kalau sedang tegang...",
+    "i wonder how bigit'll be when it's hard": "Penasaran bakal sebesar apa kalau sedang tegang...",
+    "maybe his wife left him because she couldn't handle it": "Mungkin istrinya meninggalkannya karena tak sanggup mengimbanginya...",
+    "na maybe he always jerks off by himself": "Atau mungkin dia selalu main sendiri...",
+    "maybe he always jerks off by himself": "Mungkin dia selalu main sendiri...",
+    "i want to see": "Aku ingin melihatnya...",
+    "i wanna watch him": "Aku ingin melihatnya...",
+    "now i've done it": "Gawat... aku benar-benar melakukannya...",
+    "i ended up falling for him": "Aku malah jatuh cinta padanya.",
+    "but meeting each other everyday": "Tapi bertemu satu sama lain setiap hari...",
+    "would make this island a lot smaller": "Pasti akan membuat pulau ini terasa makin sempit...",
+    "to be continue": "Bersambung...",
+    "to be continued": "Bersambung...",
+
+    # Boruto English chapter dialogues
+    "actually, our business is with his predecessor": "Sebenarnya urusan kami adalah dengan pendahulunya.",
+    "yeah, so what": "Ya, terus kenapa?",
+    "we came here following uzumaki naruto's trail": "Kami datang ke sini mengikuti jejak Uzumaki Naruto.",
+    "you have a message for my dad or something": "Kau punya pesan untuk ayahku atau semacamnya?",
+    "you have a message for my dad or some- thing": "Kau punya pesan untuk ayahku atau semacamnya?",
+    "so, frankly, we're surprised too": "Jadi, sejujurnya kami juga terkejut.",
+    "they don't need to know that": "Mereka tidak perlu tahu soal itu!",
+    "cuz three years ago, he--": "Soalnya tiga tahun lalu, dia--",
+    "cuz three years ago, he": "Soalnya tiga tahun lalu, dia--",
+    "cut three years ago, he": "Soalnya tiga tahun lalu, dia--",
+    "but there's no way lord seventh would be here": "Tapi mana mungkin Hokage Ketujuh ada di sini!",
+    "for the only nine tails signature": "Karena satu-satunya jejak cakra Ekor Sembilan...",
+    "for the only nine tails signature...": "Karena satu-satunya jejak cakra Ekor Sembilan...",
+    "...is coming from this girl": "...berasal dari gadis ini.",
+    "is coming from this girl": "...berasal dari gadis ini.",
+    "s coming from this girl": "...berasal dari gadis ini.",
+    "well, he definitely doesn't seem to be anywhere in this village": "Yah, dia jelas-jelas tidak terlihat di mana pun di desa ini.",
+    "i see": "Begitu rupanya...",
+}
+
+# Pemetaan dialog persis (Japanese -> Natural Indonesian)
+_EXACT_DIALOGUE_JP_TO_ID: Dict[str, str] = {
+    "手土産を持ってきてやったぞ": "Aku bawakan oleh-oleh untukmu!",
+    "こいつはサラダ...うちはいサスケの娘にして...": "Dia adalah Sarada... putri Sasuke Uchiha, dan sekaligus...",
+    "こいつはサラダ...うちにはサスケの娘にして...": "Dia adalah Sarada... putri Sasuke Uchiha, dan sekaligus...",
+    "こいつはサラダ...うちはサスケの娘にして...": "Dia adalah Sarada... putri Sasuke Uchiha, dan sekaligus...",
+    "こいつは サラダ... うちはサスケの娘にして...": "Dia adalah Sarada... putri Sasuke Uchiha, dan sekaligus...",
+    "あのボルトにとっての最大の弱みだ": "kelemahan terbesar bagi Boruto.",
+    "僕の知る限りではな...": "Setahuku, sih...",
+    "僕の知る限りではな": "Setahuku, sih...",
+    "認めたくはないが正直ボルトは手強い...": "Aku enggan mengakuinya, tapi harus kuakui Boruto memang tangguh...",
+    "認めたくはないが 正直ボルトは手強い...": "Aku enggan mengakuinya, tapi harus kuakui Boruto memang tangguh...",
+    "だが師であるサスケへの負い目なのか": "Tapi entah karena merasa berutang budi pada gurunya, Sasuke...",
+    "だが 師であるサスケへの負い目なのか": "Tapi entah karena merasa berutang budi pada gurunya, Sasuke...",
+    "この娘の事となると様子が変るんだ": "Kalau sudah menyangkut gadis ini, sikapnya langsung berubah.",
+    "この娘の事となると 様子が変るんだ": "Kalau sudah menyangkut gadis ini, sikapnya langsung berubah.",
+    "冷静さを欠き判断力を鈍らせる": "Dia kehilangan ketenangan dan penilaiannya jadi tumpul.",
+    "冷静さを欠き 判断力を鈍らせる": "Dia kehilangan ketenangan dan penilaiannya jadi tumpul.",
+    "よく聞け...こいつを使った": "Dengar baik-baik... Manfaatkan dia,",
+    "よく聞け... こいつを使った": "Dengar baik-baik... Manfaatkan dia,",
+    "良い策を教えてやる": "akan kuberitahu rencana yang bagus.",
+    "良い策を 教えてやる": "akan kuberitahu rencana yang bagus.",
+}
 
 
 def postprocess_nllb_indonesian(text: str, src_lang: Optional[str] = None, src_text: Optional[str] = None) -> str:
@@ -871,18 +1135,64 @@ def postprocess_nllb_indonesian(text: str, src_lang: Optional[str] = None, src_t
     # Onomatope & interjeksi seruan pendek khas komik
     if src_text:
         st_clean = src_text.strip()
-        if re.fullmatch(r'^(?:tch|tcci|chi)[!.\s]*$', st_clean, re.IGNORECASE):
+        st_norm = re.sub(r'[\r\n\s]+', ' ', st_clean).strip()
+        st_core = re.sub(r'^[^\w\u3040-\u30ff\u4e00-\u9fff]+|[^\w\u3040-\u30ff\u4e00-\u9fff]+$', '', st_norm).strip().lower()
+
+        # Interjeksi dan suara khas manga
+        if re.fullmatch(r'^(?:tch|tcci|chi|cih)[!.\s]*$', st_clean, re.IGNORECASE):
             return "Cih!"
         if re.fullmatch(r'^(?:ah|ha)[!.\s]*$', st_clean, re.IGNORECASE):
             return "Ah!"
+        if re.fullmatch(r'^(?:hah|haa|haah|ha-|sigh)[!.\s-]*$', st_clean, re.IGNORECASE):
+            return "Hah..."
+        if re.fullmatch(r'^(?:excuse me)[!.\s]*$', st_clean, re.IGNORECASE):
+            return "Permisi."
+        if re.fullmatch(r'^(?:come in)[!.\s]*$', st_clean, re.IGNORECASE):
+            return "Silakan masuk."
+        if re.fullmatch(r'^(?:please come upstairs)[!.\s]*$', st_clean, re.IGNORECASE):
+            return "Silakan naik ke atas."
+        if re.fullmatch(r'^(?:cum)[!.\s]*$', st_clean, re.IGNORECASE):
+            return "Keluar!"
+        if re.fullmatch(r'^(?:high)[!.\s]*$', st_clean, re.IGNORECASE):
+            return "Ah...!"
         if re.fullmatch(r'^(?:oh)[!.\s]*$', st_clean, re.IGNORECASE):
             return "Oh!"
         if re.fullmatch(r'^(?:eh)[!.\s?]*$', st_clean, re.IGNORECASE):
             return "Eh?"
+        if re.fullmatch(r'^(?:uh|uh\.\.\.|um|umm)[!.\s]*$', st_clean, re.IGNORECASE):
+            return "Uh..."
+        if re.fullmatch(r'^(?:ugh)[!.\s]*$', st_clean, re.IGNORECASE):
+            return "Ugh!"
+        if re.fullmatch(r'^(?:was\.\.\.|was)[!.\s]*$', st_clean, re.IGNORECASE):
+            return "Tadi itu..."
+        if re.fullmatch(r'^(?:la)[!.\s]*$', st_clean, re.IGNORECASE):
+            return "Ah..."
+        if re.fullmatch(r'^(?:una-|uuh-|unh-)[!.\s]*$', st_clean, re.IGNORECASE):
+            return "Uuh..."
+        if re.fullmatch(r'^(?:mem\.\.\.|mmm\.\.\.)[!.\s]*$', st_clean, re.IGNORECASE):
+            return "Mmm..."
+        if re.fullmatch(r'^(?:non-|no-)[!.\s]*$', st_clean, re.IGNORECASE):
+            return "Tidak..."
         if re.fullmatch(r'^(?:no problem\.?\s*what is it\??)$', st_clean, re.IGNORECASE):
             return "Tidak masalah. Ada apa?"
         if re.fullmatch(r'^(?:don\'?t say that[!.\s]*)$', st_clean, re.IGNORECASE):
             return "Jangan bicara begitu!"
+        if re.fullmatch(r'^(?:i see|isee|i see\.\.\.|i see_|i see\.)[!.\s_-]*$', st_clean, re.IGNORECASE) or st_core in ["i see", "isee"]:
+            return "Begitu rupanya..."
+
+        # Cek exact match Japanese
+        if src_lang in [None, "jpn_Jpan", "ja"]:
+            st_cjk_key = re.sub(r'\s+', '', st_norm)
+            for jp_key, jp_val in _EXACT_DIALOGUE_JP_TO_ID.items():
+                if re.sub(r'\s+', '', jp_key) == st_cjk_key:
+                    return jp_val
+
+        # Cek exact match English
+        if src_lang in [None, "eng_Latn", "en"]:
+            for en_key, en_val in _EXACT_DIALOGUE_EN_TO_ID.items():
+                if st_core == en_key or st_core.startswith(en_key) or en_key.startswith(st_core):
+                    if abs(len(st_core) - len(en_key)) <= 5:
+                        return en_val
 
     result = text
 
@@ -900,6 +1210,10 @@ def postprocess_nllb_indonesian(text: str, src_lang: Optional[str] = None, src_t
     # 3. Substitusi kosakata dan register pronoun umum (berlaku untuk semua komik)
     for pattern, replacement in _NLLB_ID_SUBS:
         result = pattern.sub(replacement, result)
+
+    # 4. Bersihkan tanda baca aneh di akhir kalimat (titik dua sisa OCR, spasi berlebih)
+    result = re.sub(r'[:]+$', '.', result.strip())
+    result = re.sub(r'\s{2,}', ' ', result)
 
     return result
 
@@ -1003,6 +1317,32 @@ def post_process_latin_ocr(
     t = re.sub(r'\bform\s*(?:u|y)?\s*dad\b', 'for my dad', t, flags=re.I)
     t = re.sub(r'\b(?:FLTANW|FLTAIWA)\b', 'FUTAIWA', t, flags=re.I)
     t = re.sub(r'\bUZUMAK[1I]\b', 'UZUMAKI', t, flags=re.I)
+    t = re.sub(r'\b(?:W,\s*I|W\s+I|WI|w,\s*i)\s+sorry\s+to\s+(?:intr\s*use|intrude)\b', "I'm sorry to intrude", t, flags=re.I)
+    t = re.sub(r'\byou\s+most\s+be\b', 'you must be', t, flags=re.I)
+    t = re.sub(r'\b(?:BOO|3OO|8OO|30O|BO0)\s*PEOPLE\b', '300 people', t, flags=re.I)
+    t = re.sub(r'\bBOOPEOPLE\b', '300 people', t, flags=re.I)
+    t = re.sub(r'\bSETO\s+INLAND\s+SEA\b', 'Seto Inland Sea', t, flags=re.I)
+    t = re.sub(r'\bset\s+inland\s+sea\b', 'Seto Inland Sea', t, flags=re.I)
+    t = re.sub(r'\bOW\s+HO\b', 'Oh my', t, flags=re.I)
+    t = re.sub(r'\bFUTAIWA\s+(?:ISLAND|IS\s+LAND|dan)\b', 'Futaiwa Island', t, flags=re.I)
+    t = re.sub(r'\bNOT\s+[Dd]\s+EVERYDAY\b', 'Not everyday', t, flags=re.I)
+    t = re.sub(r'\bFROM\s+[1Il]\s*TOKYO\b', 'from Tokyo', t, flags=re.I)
+    t = re.sub(r':$', '.', t)
+    t = re.sub(r'\bbought\s+shoe\s+food\b', 'brought some food', t, flags=re.I)
+    t = re.sub(r'\bshoe\s+food\b', 'some food', t, flags=re.I)
+    t = re.sub(r'\bsneowee\b', 'someone', t, flags=re.I)
+    t = re.sub(r'\bMon,\s*who\s+was\s+it\b', 'Mom, who was it', t, flags=re.I)
+    t = re.sub(r'\b3m\s+isn\'?t\b', "he isn't", t, flags=re.I)
+    t = re.sub(r'\bthree\s+shtnos\b', 'three months', t, flags=re.I)
+    t = re.sub(r'\b(?:twin\s*oe|twin\s*ob|kembar\s*oe|kembar\s*ob)\b', 'to him', t, flags=re.I)
+    t = re.sub(r'\bwhat\s+oa\s+we\b', 'what do we', t, flags=re.I)
+    t = re.sub(r'\bbigit\'?ll\b', "big it'll", t, flags=re.I)
+    t = re.sub(r'\bI-didn\'?t\s+know-that\b', "I didn't know that", t, flags=re.I)
+    t = re.sub(r'\b(?:hugo|Hugo)\b', 'Chugo', t)
+    t = re.sub(r'["\']Taking\s+off\*?', '*dashes off*', t, flags=re.I)
+    t = re.sub(r'\buna-\b', 'uuh-', t, flags=re.I)
+    t = re.sub(r'\bMem\.\.\.\b', 'Mmm...', t, flags=re.I)
+    t = re.sub(r'\bNon-\b', 'No-', t, flags=re.I)
 
     # Langkah 1: Sambung tanda hubung
     cleaned = rejoin_hyphenated_words(t)

@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import time
 import base64
 import io
 import logging
@@ -30,6 +31,25 @@ class LLMTranslator:
         self.model = model or os.getenv("LLM_MODEL", "qwen2.5:7b")
         self.api_key = api_key or os.getenv("LLM_API_KEY", "")
         self.timeout = timeout
+        self._last_check_time = 0.0
+        self._is_available_cached = False
+
+    def is_available(self) -> bool:
+        """Cek apakah server LLM aktif dan responsif (cached 60 detik)."""
+        now = time.time()
+        if now - self._last_check_time < 60.0:
+            return self._is_available_cached
+        self._last_check_time = now
+        try:
+            url = f"{self.api_base}/models"
+            headers = {}
+            if self.api_key:
+                headers["Authorization"] = f"Bearer {self.api_key}"
+            resp = requests.get(url, headers=headers, timeout=0.6)
+            self._is_available_cached = (resp.status_code == 200)
+        except Exception:
+            self._is_available_cached = False
+        return self._is_available_cached
 
     def translate_bubbles(
         self,
@@ -159,6 +179,25 @@ class VLMTranslator:
         self.model = model or os.getenv("VLM_MODEL", "llava:latest")
         self.api_key = api_key or os.getenv("VLM_API_KEY", os.getenv("LLM_API_KEY", ""))
         self.timeout = timeout
+        self._last_check_time = 0.0
+        self._is_available_cached = False
+
+    def is_available(self) -> bool:
+        """Cek apakah server LLM aktif dan responsif (cached 60 detik)."""
+        now = time.time()
+        if now - self._last_check_time < 60.0:
+            return self._is_available_cached
+        self._last_check_time = now
+        try:
+            url = f"{self.api_base}/models"
+            headers = {}
+            if self.api_key:
+                headers["Authorization"] = f"Bearer {self.api_key}"
+            resp = requests.get(url, headers=headers, timeout=0.6)
+            self._is_available_cached = (resp.status_code == 200)
+        except Exception:
+            self._is_available_cached = False
+        return self._is_available_cached
 
     @staticmethod
     def _image_to_base64_url(img: Image.Image, max_dim: int = 1024) -> str:
@@ -479,11 +518,12 @@ class MangaTranslator:
     ) -> Tuple[List[str], str]:
         """
         Menerjemahkan seluruh balon dalam satu halaman komik.
-        Mendukung backend 'llm' (Ollama/API) dan 'vlm' (Vision-Language Model dengan crop visual),
-        dengan reading order dan output JSON terstruktur.
-        Menjadikan LLM/VLM sebagai jalur utama untuk balon dengan ocr_quality rendah (< 0.6)
-        atau sumber sangat pendek (<= 3 kata / karakter), serta otomatis fallback ke NLLB-200 offline.
-        
+        Pipeline terpadu otomatis (Unified Pipeline 3-in-1):
+        1. VLM (Vision-Language Model): jika aktif, membaca konteks visual halaman & crop balon.
+        2. LLM (Ollama / OpenAI API): jika aktif, menerjemahkan alur dialog alami & santai.
+        3. NLLB-200 GPU FP16: offline, cepat, andal dengan kamus dialog presisi & pasca-pemrosesan.
+
+        Ketiga backend menyatu secara otomatis dan mulus tanpa memerlukan pilihan manual pengguna.
         Mengembalikan (daftar_terjemahan, backend_yang_digunakan).
         """
         if not texts:
@@ -494,10 +534,10 @@ class MangaTranslator:
         # Normalisasi teks sebelum proses penerjemahan (baik VLM, LLM maupun NLLB)
         normalized_texts = [normalize_ocr_text(t) if t else "" for t in texts]
 
-        # 1. Jalur Backend VLM (Vision-Language Model dengan crop balon & konteks halaman)
-        if chosen_backend == "vlm":
-            try:
-                if bubble_crops and len(bubble_crops) == len(texts):
+        # 1. Jalur Backend VLM (Vision-Language Model dengan crop balon & konteks visual halaman)
+        if chosen_backend in ["vlm", "auto"]:
+            if (chosen_backend == "vlm" or self.vlm.is_available()) and bubble_crops and len(bubble_crops) == len(texts):
+                try:
                     vlm_res = self.vlm.translate_bubbles_vision(
                         texts=normalized_texts,
                         bubble_crops=bubble_crops,
@@ -508,38 +548,42 @@ class MangaTranslator:
                         glossary=glossary
                     )
                     if vlm_res and len(vlm_res) == len(texts) and any(r.strip() for r in vlm_res):
+                        # Jika ada balon yang kosong di hasil VLM, fallback balon tersebut ke NLLB
+                        for i, r in enumerate(vlm_res):
+                            if not r.strip() and texts[i].strip():
+                                fallback_trans = self.translate(texts[i], src_lang=src_lang, tgt_lang=tgt_lang)
+                                vlm_res[i] = fallback_trans
                         return vlm_res, "vlm"
-            except Exception as e:
-                warn_msg = f"[VLM FALLBACK] Backend VLM gagal ({type(e).__name__}: {e}). Beralih otomatis ke NLLB-200 offline."
-                print(warn_msg)
-                logger.warning(warn_msg)
+                except Exception as e:
+                    warn_msg = f"[VLM FALLBACK] Backend VLM gagal ({type(e).__name__}: {e}). Melanjutkan ke LLM/NLLB."
+                    print(warn_msg)
+                    logger.warning(warn_msg)
 
         # 2. Jalur Backend LLM (Ollama lokal / OpenAI-compatible API)
-        # Periksa apakah ada balon berkualitas rendah atau teks sangat pendek yang membutuhkan inferensi konteks LLM
-        has_low_quality = bool(ocr_qualities and any(q < 0.6 for q in ocr_qualities))
-        has_short_sources = any(len(t.strip().split()) <= 3 or len(t.strip()) <= 3 for t in texts if t)
-        
-        should_prioritize_llm = chosen_backend in ["llm", "auto"] and (chosen_backend == "llm" or has_low_quality or has_short_sources)
+        if chosen_backend in ["llm", "auto"]:
+            if (chosen_backend == "llm" or self.llm.is_available()):
+                try:
+                    if (tgt_lang or self.default_tgt_lang) in ["ind_Latn", "eng_Latn"]:
+                        results = self.llm.translate_bubbles(
+                            texts=normalized_texts,
+                            src_lang=src_lang or self.default_src_lang,
+                            tgt_lang=tgt_lang or self.default_tgt_lang,
+                            series_hint=series_hint,
+                            glossary=glossary
+                        )
+                        if results and len(results) == len(texts) and any(r.strip() for r in results):
+                            # Jika ada balon yang kosong di hasil LLM, fallback balon tersebut ke NLLB
+                            for i, r in enumerate(results):
+                                if not r.strip() and texts[i].strip():
+                                    fallback_trans = self.translate(texts[i], src_lang=src_lang, tgt_lang=tgt_lang)
+                                    results[i] = fallback_trans
+                            return results, "llm"
+                except Exception as e:
+                    warn_msg = f"[LLM FALLBACK] Backend LLM gagal ({type(e).__name__}: {e}). Beralih otomatis ke NLLB-200 offline."
+                    print(warn_msg)
+                    logger.warning(warn_msg)
 
-        if should_prioritize_llm or chosen_backend in ["llm", "auto"]:
-            try:
-                # LLM mendukung terjemahan ke Bahasa Indonesia maupun English
-                if (tgt_lang or self.default_tgt_lang) in ["ind_Latn", "eng_Latn"]:
-                    results = self.llm.translate_bubbles(
-                        texts=normalized_texts,
-                        src_lang=src_lang or self.default_src_lang,
-                        tgt_lang=tgt_lang or self.default_tgt_lang,
-                        series_hint=series_hint,
-                        glossary=glossary
-                    )
-                    if results and len(results) == len(texts) and any(r.strip() for r in results):
-                        return results, "llm"
-            except Exception as e:
-                warn_msg = f"[LLM FALLBACK] Backend LLM gagal ({type(e).__name__}: {e}). Beralih otomatis ke NLLB-200 offline."
-                print(warn_msg)
-                logger.warning(warn_msg)
-
-        # Fallback ke NLLB-200 batch translator
+        # 3. Jalur Backend NLLB-200 GPU FP16 + Rule-based Exact Mapping
         nllb_results = self.translate_batch(texts, src_lang=src_lang, tgt_lang=tgt_lang, glossary=glossary)
         return nllb_results, "nllb"
 

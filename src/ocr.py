@@ -76,7 +76,7 @@ class MultiLingualOCR:
             self._english_secondary_reader = easyocr.Reader(['en'], gpu=(self.device == "cuda"))
         return self._english_secondary_reader
 
-    def read_text_secondary(self, image_input: Union[str, Image.Image], lang: str = "en") -> str:
+    def read_text_secondary(self, image_input: Union[str, Image.Image, np.ndarray], lang: str = "en") -> str:
         """
         Fallback engine OCR saat kualitas pembacaan engine utama rendah (ocr_quality < 0.6):
         Untuk Latin/Inggris: mencoba EasyOCR(['en']) sebagai engine kedua.
@@ -85,42 +85,60 @@ class MultiLingualOCR:
             if not os.path.exists(image_input):
                 return ""
             img = Image.open(image_input).convert("RGB")
+            img_np = np.array(img)
+        elif isinstance(image_input, np.ndarray):
+            img_np = image_input
+            img = Image.fromarray(cv2.cvtColor(image_input, cv2.COLOR_BGR2RGB) if len(image_input.shape) == 3 and image_input.shape[2] == 3 else image_input)
         else:
             img = image_input.convert("RGB")
-
-        img_np = np.array(img)
+            img_np = np.array(img)
         if lang in ["eng_Latn", "en"]:
             try:
                 reader = self._get_english_ocr_secondary()
                 results = reader.readtext(img_np, detail=0)
-                return " ".join(results).strip() if results else ""
+                txt = " ".join(results).strip() if results else ""
+                if not txt:
+                    inv_res = reader.readtext(255 - img_np, detail=0)
+                    txt = " ".join(inv_res).strip() if inv_res else ""
+                return txt
             except Exception as e:
                 print(f"[OCR] Info: Secondary engine EasyOCR gagal: {e}")
                 res, _ = self.rapid_ocr(img_np)
                 return " ".join([item[1] for item in res]).strip() if res else ""
         return ""
 
-    def read_text(self, image_input: Union[str, Image.Image], lang_hint: Optional[str] = None) -> str:
+    def read_text(self, image_input: Union[str, Image.Image, np.ndarray], lang_hint: Optional[str] = None) -> str:
         """
         Membaca teks dari balon kata komik secara otomatis:
         Manga Jepang -> Manhua Mandarin / Comic Barat -> Manhwa Korea
+        Mendukung semua warna balon: putih, hitam, abu-abu, screentone, dan bergradasi.
         """
         if isinstance(image_input, str):
             if not os.path.exists(image_input):
                 raise FileNotFoundError(f"File gambar tidak ditemukan: {image_input}")
             img = Image.open(image_input).convert("RGB")
+            img_np = np.array(img)
+        elif isinstance(image_input, np.ndarray):
+            img_np = image_input
+            img = Image.fromarray(cv2.cvtColor(image_input, cv2.COLOR_BGR2RGB) if len(image_input.shape) == 3 and image_input.shape[2] == 3 else image_input)
         else:
             img = image_input.convert("RGB")
-
-        img_np = np.array(img)
+            img_np = np.array(img)
 
         # Petunjuk eksplisit dari user jika ada
         if lang_hint in ["jpn_Jpan", "ja"]:
-            return self.manga_ocr(img).strip()
+            txt = self.manga_ocr(img).strip()
+            if not txt:
+                txt = self.manga_ocr(Image.fromarray(255 - img_np)).strip()
+            return txt
         elif lang_hint in ["kor_Hang", "ko"]:
             reader = self._get_korean_ocr()
             results = reader.readtext(img_np, detail=0)
-            return " ".join(results).strip()
+            txt = " ".join(results).strip() if results else ""
+            if not txt:
+                inv_res = reader.readtext(255 - img_np, detail=0)
+                txt = " ".join(inv_res).strip() if inv_res else ""
+            return txt
         elif lang_hint in ["eng_Latn", "en"]:
             engine = self.rapid_ocr_en or self.rapid_ocr
             prep_np = img_np
@@ -131,10 +149,32 @@ class MultiLingualOCR:
                     new_h = int(img_np.shape[0] * scale)
                     prep_np = cv2.resize(img_np, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
             res, _ = engine(prep_np)
-            return " ".join([item[1] for item in res]).strip() if res else ""
+            txt = " ".join([item[1] for item in res]).strip() if res else ""
+            avg_score = float(np.mean([item[2] for item in res])) if res else 0.0
+            alpha_count = len(re.findall(r'[A-Za-z]', txt))
+
+            # Jika RapidOCR kosong, atau skor rendah (< 0.65), atau huruf sangat sedikit (<= 1 huruf):
+            # Coba secondary OCR (EasyOCR) yang sangat tangguh untuk teks pendek Latin
+            if not txt or avg_score < 0.65 or alpha_count <= 1:
+                sec_txt = self.read_text_secondary(img_np, lang="en")
+                sec_alpha = len(re.findall(r'[A-Za-z]', sec_txt)) if sec_txt else 0
+                if sec_txt and sec_alpha > alpha_count:
+                    txt = sec_txt
+                elif not txt:
+                    res_inv, _ = engine(255 - prep_np)
+                    txt_inv = " ".join([item[1] for item in res_inv]).strip() if res_inv else ""
+                    if txt_inv:
+                        txt = txt_inv
+                    elif sec_txt:
+                        txt = sec_txt
+            return txt
         elif lang_hint in ["zho_Hans", "zh"]:
             res, _ = self.rapid_ocr(img_np)
-            return " ".join([item[1] for item in res]).strip() if res else ""
+            txt = " ".join([item[1] for item in res]).strip() if res else ""
+            if not txt:
+                res_inv, _ = self.rapid_ocr(255 - img_np)
+                txt = " ".join([item[1] for item in res_inv]).strip() if res_inv else ""
+            return txt
 
         # =========================================================
         # AUTO-ROUTING CERDAS:
@@ -152,6 +192,10 @@ class MultiLingualOCR:
                 prep_np = cv2.resize(img_np, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
         rapid_res, _ = engine_lat(prep_np)
         rapid_text = " ".join([item[1] for item in rapid_res]).strip() if rapid_res else ""
+        if not rapid_text:
+            inv_res, _ = engine_lat(255 - prep_np)
+            if inv_res:
+                rapid_text = " ".join([item[1] for item in inv_res]).strip()
 
         from src.text_utils import count_english_words, calculate_ocr_quality, split_concatenated_words
         prep_split = split_concatenated_words(rapid_text)
@@ -166,6 +210,8 @@ class MultiLingualOCR:
 
         # 2. Jika bukan teks Inggris yang jelas, cek Manga-OCR untuk teks Jepang
         manga_text = self.manga_ocr(img).strip()
+        if not manga_text:
+            manga_text = self.manga_ocr(Image.fromarray(255 - img_np)).strip()
         cjk_chars = len(re.findall(r'[\u3040-\u30ff\u4e00-\u9fff]', manga_text))
         kana_chars = len(re.findall(r'[\u3040-\u30ff]', manga_text))
         latin_chars = len(re.findall(r'[a-zA-Z\uFF21-\uFF3A\uFF41-\uFF5A]', manga_text))

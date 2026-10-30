@@ -16,6 +16,9 @@ output/
 input/
 debug_output/
 evaluation/debug_overlays/
+evaluation/debug_*/
+evaluation/*.png
+hasil_translate_sebagai_bahan_pembelajaran/
 glossary/*.json
 scratch/
 
